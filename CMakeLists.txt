@@ -4,6 +4,7 @@ project(fast_gicp)
 add_definitions(-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2)
 set(CMAKE_C_FLAGS "-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
 set(CMAKE_CXX_FLAGS "-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 set(CMAKE_BUILD_TYPE "Release")
 
@@ -54,6 +55,8 @@ target_link_libraries(gicp_align
 
 if(CUDA_FOUND)
   set(CUDA_NVCC_FLAGS "--expt-relaxed-constexpr")
+  SET(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -std=c++11")
+
   add_definitions(-DUSE_VGICP_CUDA)
 
   cuda_add_library(fast_vgicp_cuda
