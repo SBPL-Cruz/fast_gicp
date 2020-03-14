@@ -13,6 +13,7 @@
 #include <fast_gicp/so3/so3.hpp>
 #include <fast_gicp/opt/gauss_newton.hpp>
 #include <fast_gicp/gicp/experimental/fast_gicp_mp.hpp>
+#include <atomic>
 
 namespace fast_gicp {
 

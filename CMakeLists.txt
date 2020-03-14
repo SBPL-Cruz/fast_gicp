@@ -1,9 +1,10 @@
-cmake_minimum_required(VERSION 3.10.0)
+cmake_minimum_required(VERSION 3.5.0)
 project(fast_gicp)
 
 add_definitions(-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2)
 set(CMAKE_C_FLAGS "-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
 set(CMAKE_CXX_FLAGS "-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 set(CMAKE_BUILD_TYPE "Release")
 
@@ -21,6 +22,7 @@ endif()
 
 find_package(CUDA)
 if(CUDA_FOUND)
+  set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-10.2)
   include_directories(${CUDA_INCLUDE_DIRS})
   link_directories(${CUDA_LIBRARY_DIRS})
 endif()
@@ -66,29 +68,30 @@ target_link_libraries(gicp_align
 )
 
 
-if(CUDA_FOUND)
-  set(CUDA_NVCC_FLAGS "--expt-relaxed-constexpr")
-  add_definitions(-DUSE_VGICP_CUDA)
-
-  cuda_add_library(fast_vgicp_cuda
-    src/fast_gicp/cuda/fast_vgicp_cuda.cu
-  )
-  target_include_directories(fast_vgicp_cuda PRIVATE
-    include
-    thirdparty/Sophus
-    thirdparty/Eigen
-    thirdparty/nvbio
-  )
-  target_link_libraries(fast_vgicp_cuda
-    cublas
-  )
-
-  # add vgicp_cuda to libfast_gicp
-  target_sources(fast_gicp PRIVATE
-    src/fast_gicp/gicp/fast_vgicp_cuda.cpp
-  )
-  target_link_libraries(fast_gicp
-    fast_vgicp_cuda
-  )
-  add_dependencies(fast_gicp fast_vgicp_cuda)
-endif()
+#if(CUDA_FOUND)
+#  set(CUDA_NVCC_FLAGS "--expt-relaxed-constexpr")
+#  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -std=c++11")
+#  add_definitions(-DUSE_VGICP_CUDA)
+#
+#  cuda_add_library(fast_vgicp_cuda
+#    src/fast_gicp/cuda/fast_vgicp_cuda.cu
+#  )
+#  target_include_directories(fast_vgicp_cuda PRIVATE
+#    include
+#    thirdparty/Sophus
+#    thirdparty/Eigen
+#    thirdparty/nvbio
+#  )
+#  target_link_libraries(fast_vgicp_cuda
+#    cublas
+#  )
+#
+#  # add vgicp_cuda to libfast_gicp
+#  target_sources(fast_gicp PRIVATE
+#    src/fast_gicp/gicp/fast_vgicp_cuda.cpp
+#  )
+#  target_link_libraries(fast_gicp
+#    fast_vgicp_cuda
+#  )
+#  add_dependencies(fast_gicp fast_vgicp_cuda)
+#endif()

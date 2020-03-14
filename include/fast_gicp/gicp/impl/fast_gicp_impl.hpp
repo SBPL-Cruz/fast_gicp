@@ -13,6 +13,7 @@
 #include <fast_gicp/so3/so3.hpp>
 #include <fast_gicp/gicp/fast_gicp.hpp>
 #include <fast_gicp/opt/gauss_newton.hpp>
+#include <atomic>
 
 namespace fast_gicp {
 
@@ -29,9 +30,10 @@ FastGICP<PointSource, PointTarget>::FastGICP() {
   max_iterations_ = 64;
   rotation_epsilon_ = 2e-3;
   transformation_epsilon_ = 5e-4;
-  // corr_dist_threshold_ = 1.0;
-  regularization_method_ = PLANE;
-  corr_dist_threshold_ = std::numeric_limits<float>::max();
+  corr_dist_threshold_ = 0.05;
+  regularization_method_ = FROBENIUS;
+  // regularization_method_ = PLANE;
+  // corr_dist_threshold_ = std::numeric_limits<float>::max();
 
   source_kdtree.reset(new pcl::search::KdTree<PointSource>);
   target_kdtree.reset(new pcl::search::KdTree<PointTarget>);
