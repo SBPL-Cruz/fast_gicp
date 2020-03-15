@@ -30,7 +30,7 @@ FastGICP<PointSource, PointTarget>::FastGICP() {
   max_iterations_ = 64;
   rotation_epsilon_ = 2e-3;
   transformation_epsilon_ = 5e-4;
-  corr_dist_threshold_ = 0.05;
+  corr_dist_threshold_ = 0.50;
   regularization_method_ = FROBENIUS;
   // regularization_method_ = PLANE;
   // corr_dist_threshold_ = std::numeric_limits<float>::max();
@@ -226,6 +226,7 @@ Eigen::VectorXf FastGICP<PointSource, PointTarget>::loss_ls(const Eigen::Matrix<
     losses[n] = RCRd.head<3>();
     Js[n] = jlossexp.block<3, 6>(0, 0);
   }
+  // std::cout << "Correspondences count : " << count << std::endl;
 
   int final_size = count;
   *J = Eigen::Map<Eigen::MatrixXf>(Js.front().data(), 6, final_size * 3).transpose();
