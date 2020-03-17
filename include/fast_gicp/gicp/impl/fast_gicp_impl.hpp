@@ -30,7 +30,8 @@ FastGICP<PointSource, PointTarget>::FastGICP() {
   max_iterations_ = 64;
   rotation_epsilon_ = 2e-3;
   transformation_epsilon_ = 5e-4;
-  corr_dist_threshold_ = 0.50;
+  corr_dist_threshold_ = 0.05;
+  // Sugar works only with 0.5?
   regularization_method_ = FROBENIUS;
   // regularization_method_ = PLANE;
   // corr_dist_threshold_ = std::numeric_limits<float>::max();

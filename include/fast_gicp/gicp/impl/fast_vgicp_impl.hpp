@@ -32,12 +32,13 @@ FastVGICP<PointSource, PointTarget>::FastVGICP() {
   transformation_epsilon_ = 5e-4;
   // corr_dist_threshold_ = 1.0;
   // regularization_method_ = PLANE;
-  corr_dist_threshold_ = 0.05;
-  regularization_method_ = NORMALIZED_MIN_EIG;
+  corr_dist_threshold_ = 0.50;
+  regularization_method_ = FROBENIUS;
   // corr_dist_threshold_ = std::numeric_limits<float>::max();
 
   voxel_resolution_ = 1.0;
-  search_method_ = DIRECT1;
+  // search_method_ = DIRECT1;
+  search_method_ = DIRECT7;
   voxel_mode_ = ADDITIVE;
 
   source_kdtree.reset(new pcl::search::KdTree<PointSource>);
