@@ -1,6 +1,8 @@
 #ifndef FAST_GICP_CUDA_BRUTE_FORCE_KNN_CUH
 #define FAST_GICP_CUDA_BRUTE_FORCE_KNN_CUH
 
+#pragma once
+
 #include <Eigen/Core>
 
 #include <thrust/sequence.h>

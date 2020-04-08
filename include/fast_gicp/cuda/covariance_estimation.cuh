@@ -1,6 +1,8 @@
 #ifndef FAST_GICP_CUDA_COVARIANCE_ESTIMATION_CUH
 #define FAST_GICP_CUDA_COVARIANCE_ESTIMATION_CUH
 
+#pragma once
+
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/Eigenvalues>

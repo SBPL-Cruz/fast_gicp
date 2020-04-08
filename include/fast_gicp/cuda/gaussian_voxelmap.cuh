@@ -1,6 +1,8 @@
 #ifndef FAST_GICP_CUDA_GAUSSIAN_VOXELMAP_CUH
 #define FAST_GICP_CUDA_GAUSSIAN_VOXELMAP_CUH
 
+#pragma once
+
 #include <chrono>
 #include <Eigen/Core>
 #include <thrust/unique.h>

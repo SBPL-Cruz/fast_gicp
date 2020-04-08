@@ -1,7 +1,5 @@
-#ifndef FAST_GICP_FAST_VGICP_CUDA_CORE_CUH
-#define FAST_GICP_FAST_VGICP_CUDA_CORE_CUH
-
-#pragma once
+#ifndef FAST_GICP_FAST_GICP_CUDA_CORE_CUH
+#define FAST_GICP_FAST_GICP_CUDA_CORE_CUH
 
 #include <memory>
 #include <vector>
@@ -24,15 +22,15 @@ namespace fast_gicp {
 
 class GaussianVoxelMap;
 
-class FastVGICPCudaCore {
+class FastGICPCudaCore {
 public:
   using Points = thrust::device_vector<Eigen::Vector3f, thrust::device_allocator<Eigen::Vector3f>>;
   using Indices = thrust::device_vector<int, thrust::device_allocator<int>>;
   using Matrices = thrust::device_vector<Eigen::Matrix3f, thrust::device_allocator<Eigen::Matrix3f>>;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  FastVGICPCudaCore();
-  ~FastVGICPCudaCore();
+  FastGICPCudaCore();
+  ~FastGICPCudaCore();
 
   void set_resolution(double resolution);
   void set_max_iterations(int itr);

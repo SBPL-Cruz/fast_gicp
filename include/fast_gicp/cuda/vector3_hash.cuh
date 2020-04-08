@@ -1,6 +1,8 @@
 #ifndef FAST_GICP_CUDA_VECTOR3_HASH_CUH
 #define FAST_GICP_CUDA_VECTOR3_HASH_CUH
 
+#pragma once
+
 namespace fast_gicp {
 
 // taken from boost/hash.hpp

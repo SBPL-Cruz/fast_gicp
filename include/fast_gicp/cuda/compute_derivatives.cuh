@@ -1,6 +1,8 @@
 #ifndef FAST_GICP_CUDA_COMPUTE_DERIVATIVES_CUH
 #define FAST_GICP_CUDA_COMPUTE_DERIVATIVES_CUH
 
+#pragma once
+
 #include <Eigen/Core>
 #include <sophus/so3.hpp>
 
