@@ -18,8 +18,17 @@ namespace fast_gicp {
 
 namespace {
   struct neighborsearch_kernel {
-    neighborsearch_kernel(int k, const thrust::device_vector<Eigen::Vector3f>& target, thrust::device_vector<thrust::pair<float, int>>& k_neighbors)
-        : k(k), num_target_points(target.size()), target_points_ptr(target.data()), k_neighbors_ptr(k_neighbors.data()) {}
+    neighborsearch_kernel(int k, 
+                          const thrust::device_vector<Eigen::Vector3f>& target, 
+                          thrust::device_vector<thrust::pair<float, int>>& k_neighbors,
+                          const thrust::device_vector<int>& source_pose_index_range)
+        : k(k), 
+          num_target_points(target.size()), 
+          target_points_ptr(target.data()), 
+          k_neighbors_ptr(k_neighbors.data()),
+          source_pose_index_range_ptr(source_pose_index_range.data()),
+          source_pose_index_range_size(source_pose_index_range.size())
+    {}
 
     template<typename Tuple>
     __host__ __device__ void operator()(const Tuple& idx_x) const {
@@ -42,12 +51,27 @@ namespace {
       typedef nvbio::priority_queue<thrust::pair<float, int>, vector_type, compare_type> queue_type;
       queue_type queue(vector_type(0, k_neighbors - 1));
 
-      for(int i = 0; i < k; i++) {
+      
+
+      // for(int i = k; i < num_target_points; i++) {
+      int low_i = 0;
+      int high_i = num_target_points;
+      // If pose range info is there
+      if (source_pose_index_range_size > 0)
+      {
+        // Get pose index of current point
+        int point_pose_index = thrust::get<2>(idx_x);     
+        low_i = source_pose_index_range_ptr[point_pose_index];
+        high_i = source_pose_index_range_ptr[point_pose_index + 1];
+        // printf("Setting index range for point : %d, %d\n", low_i, high_i);
+      }
+      
+      for(int i = low_i; i < low_i + k; i++) {
         float sq_dist = (pts[i] - x).squaredNorm();
         queue.push(thrust::make_pair(sq_dist, i));
       }
-
-      for(int i = k; i < num_target_points; i++) {
+      for(int i = low_i + k; i < high_i; i++) {
+        
         float sq_dist = (pts[i] - x).squaredNorm();
         if(sq_dist < queue.top().first) {
           queue.pop();
@@ -59,6 +83,8 @@ namespace {
     const int k;
     const int num_target_points;
     thrust::device_ptr<const Eigen::Vector3f> target_points_ptr;
+    thrust::device_ptr<const int> source_pose_index_range_ptr;
+    const int source_pose_index_range_size;
 
     thrust::device_ptr<thrust::pair<float, int>> k_neighbors_ptr;
   };
@@ -95,20 +121,27 @@ namespace {
   };
 }
 
-static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>& source, const thrust::device_vector<Eigen::Vector3f>& target, int k, thrust::device_vector<thrust::pair<float, int>>& k_neighbors, bool do_sort=false) {
+static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>& source, 
+                                   const thrust::device_vector<Eigen::Vector3f>& target, 
+                                   int k, thrust::device_vector<thrust::pair<float, int>>& k_neighbors, 
+                                   const thrust::device_vector<int>& source_pose_map = thrust::device_vector<int>(0),
+                                   const thrust::device_vector<int>& source_pose_index_range = thrust::device_vector<int>(0),
+                                   bool do_sort=false) {
+                                     
   thrust::device_vector<int> d_indices(source.size());
   thrust::sequence(d_indices.begin(), d_indices.end());
 
-  auto first = thrust::make_zip_iterator(thrust::make_tuple(d_indices.begin(), source.begin()));
-  auto last = thrust::make_zip_iterator(thrust::make_tuple(d_indices.end(), source.end()));
+  auto first = thrust::make_zip_iterator(thrust::make_tuple(d_indices.begin(), source.begin(), source_pose_map.begin()));
+  auto last = thrust::make_zip_iterator(thrust::make_tuple(d_indices.end(), source.end(), source_pose_map.end()));
 
   // nvbio::priority_queue requires (k + 1) working space
   k_neighbors.resize(source.size() * k, thrust::make_pair(-1.0f, -1));
-  thrust::for_each(first, last, neighborsearch_kernel(k, target, k_neighbors));
+  thrust::for_each(first, last, neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range));
 
   if(do_sort) {
     thrust::for_each(d_indices.begin(), d_indices.end(), sorting_kernel(k, k_neighbors));
   }
+  printf("brute_force_knn_search() done\n");
 }
 
 } // namespace fast_gicp

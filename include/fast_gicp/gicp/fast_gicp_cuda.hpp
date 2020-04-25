@@ -71,6 +71,14 @@ public:
 
   virtual void setInputTarget(const PointCloudTargetConstPtr& cloud) override;
 
+  void computeTransformationMulti(float* source_cloud, 
+                                  int source_point_count, 
+                                  float* target_cloud, 
+                                  int target_point_count,
+                                  int* cloud_pose_map,
+                                  int num_poses,
+                                  Eigen::Isometry3f& estimated);
+
 protected:
   virtual void computeTransformation(PointCloudSource& output, const Matrix4& guess) override;
 

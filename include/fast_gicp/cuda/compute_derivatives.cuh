@@ -122,7 +122,15 @@ struct is_nan_kernel {
 } // namespace
 
 
-void compute_derivatives(const thrust::device_vector<Eigen::Vector3f>& src_points, const thrust::device_vector<Eigen::Matrix3f>& src_covs, const GaussianVoxelMap& voxelmap, const Eigen::Matrix<float, 6, 1>& x, thrust::device_vector<Eigen::Vector3f>& losses, thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>>& Js) {
+void compute_derivatives(const thrust::device_vector<Eigen::Vector3f>& src_points, 
+                         const thrust::device_vector<Eigen::Matrix3f>& src_covs, 
+                         const thrust::device_vector<Eigen::Vector3f>& target_points, 
+                         const thrust::device_vector<Eigen::Matrix3f>& target_covariances,
+                         const GaussianVoxelMap& voxelmap, 
+                         const Eigen::Matrix<float, 6, 1>& x, 
+                         thrust::device_vector<Eigen::Vector3f>& losses, 
+                         thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>>& Js) {
+
   float nan = std::nanf("");
   losses.resize(src_points.size());
   Js.resize(src_points.size());

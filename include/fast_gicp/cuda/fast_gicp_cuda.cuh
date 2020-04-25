@@ -54,6 +54,17 @@ public:
   bool optimize(Eigen::Isometry3f& estimated);
   bool optimize(const Eigen::Isometry3f& initial_guess, Eigen::Isometry3f& estimated);
 
+  void set_source_cloud_multi(float* point_cloud, int point_count);
+  void set_target_cloud_multi(float* point_cloud, int point_count);
+  void find_source_neighbors_multi(int k, int* cloud_pose_map, int num_poses);
+  bool optimize_multi(float* source_cloud, 
+                      int source_point_count, 
+                      float* target_cloud, 
+                      int target_point_count,
+                      int* cloud_pose_map,
+                      int num_poses,
+                      Eigen::Isometry3f& estimated);
+
 private:
   bool is_converged(const Eigen::Matrix<float, 6, 1>& delta) const;
 

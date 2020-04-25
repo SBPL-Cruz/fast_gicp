@@ -10,6 +10,8 @@
 #include <fast_gicp/cuda/covariance_estimation.cuh>
 #include <fast_gicp/cuda/gaussian_voxelmap.cuh>
 #include <fast_gicp/cuda/compute_derivatives.cuh>
+#include <fast_gicp/cuda/create_eigen_cloud.cuh>
+#include <fast_gicp/cuda/compute_derivatives_nn.cuh>
 
 namespace fast_gicp {
 
@@ -74,6 +76,7 @@ void FastGICPCudaCore::set_target_cloud(const std::vector<Eigen::Vector3f, Eigen
   target_points.reset(new Points(points));
 }
 
+
 void FastGICPCudaCore::set_source_neighbors(int k, const std::vector<int>& neighbors) {
   assert(k * source_points->size() == neighbors.size());
   thrust::host_vector<int> k_neighbors(neighbors.begin(), neighbors.end());
@@ -99,6 +102,12 @@ void FastGICPCudaCore::set_target_neighbors(int k, const std::vector<int>& neigh
 struct untie_pair_second {
   __device__ int operator() (thrust::pair<float, int>& p) const {
     return p.second;
+  }
+};
+
+struct untie_pair_first {
+  __device__ float operator() (thrust::pair<float, int>& p) const {
+    return p.first;
   }
 };
 
@@ -194,7 +203,9 @@ bool FastGICPCudaCore::optimize(const Eigen::Isometry3f& initial_guess, Eigen::I
 
   bool converged = false;
   for(int i = 0; i < max_iterations; i++) {
-    compute_derivatives(*source_points, *source_covariances, *voxelmap, x0, losses, Js);
+    // Js is transpose of error jacobian
+    compute_derivatives(*source_points, *source_covariances, 
+      *target_points, *target_covariances, *voxelmap, x0, losses, Js);
 
     // gauss newton
     float alpha = 1.0f;
@@ -203,8 +214,10 @@ bool FastGICPCudaCore::optimize(const Eigen::Isometry3f& initial_guess, Eigen::I
     int cols = 3 * losses.size();
 
     float* Js_ptr = thrust::reinterpret_pointer_cast<float*>(Js.data());
+    // Computing J^T x J
     cublasSgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, 6, 6, cols, &alpha, Js_ptr, 6, Js_ptr, 6, &beta, thrust::raw_pointer_cast(JJ_ptr), 6);
 
+    // Computing J^T x L
     float* loss_ptr = thrust::reinterpret_pointer_cast<float*>(losses.data());
     cublasSgemv(cublas_handle, CUBLAS_OP_N, 6, cols, &alpha, Js_ptr, 6, loss_ptr, 1, &beta, thrust::raw_pointer_cast(J_loss_ptr), 1);
 
@@ -232,5 +245,153 @@ bool FastGICPCudaCore::optimize(const Eigen::Isometry3f& initial_guess, Eigen::I
 
   return converged;
 }
+
+void FastGICPCudaCore::set_source_cloud_multi(float* source_cloud, int source_point_count) {
+  // float* device_point_cloud;
+  // cudaMalloc(&device_point_cloud, 3 * point_count * sizeof(float));
+  // cudaMemcpy(point_cloud, device_point_cloud, 3 * point_count * sizeof(float), cudaMemcpyHostToDevice);
+  // create_eigen_cloud(device_point_cloud, point_count, *source_points);
+  thrust::device_vector<Eigen::Vector3f> source_points_local;
+  float* device_point_cloud;
+  cudaMalloc(&device_point_cloud, 3 * source_point_count * sizeof(float));
+  cudaMemcpy(device_point_cloud, source_cloud, 3 * source_point_count * sizeof(float), cudaMemcpyHostToDevice);
+  create_eigen_cloud(device_point_cloud, source_point_count, source_points_local);
+
+  thrust::host_vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> points(source_points_local.begin(), source_points_local.end());
+  source_points.reset(new Points(points));
+}
+
+void FastGICPCudaCore::set_target_cloud_multi(float* target_cloud, int target_point_count) {
+  float* device_point_cloud;
+  // cudaMalloc(&device_point_cloud, 3 * point_count * sizeof(float));
+  // cudaMemcpy(device_point_cloud, point_cloud, 3 * point_count * sizeof(float), cudaMemcpyHostToDevice);
+  // create_eigen_cloud(device_point_cloud, point_count, *target_points);
+
+  thrust::device_vector<Eigen::Vector3f> target_points_local;
+  cudaMalloc(&device_point_cloud, 3 * target_point_count * sizeof(float));
+  cudaMemcpy(device_point_cloud, target_cloud, 3 * target_point_count * sizeof(float), cudaMemcpyHostToDevice);
+  create_eigen_cloud(device_point_cloud, target_point_count, target_points_local);
+
+  thrust::host_vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> points(target_points_local.begin(), target_points_local.end());
+  target_points.reset(new Points(points));
+}
+
+void FastGICPCudaCore::find_source_neighbors_multi(int k, int* cloud_pose_map, int num_poses) {
+  assert(source_points);
+  int source_point_count = source_points->size();
+  // For source KNN need to know range of pose indices in source cloud array
+  thrust::device_vector<int> cloud_pose_map_vec(cloud_pose_map, cloud_pose_map + source_point_count);
+  thrust::device_vector<int> pose_indices;
+  extract_pose_indices(cloud_pose_map_vec, source_point_count, num_poses, pose_indices);
+
+  // For each point in source array, KNN will be done within the pose index range
+  thrust::device_vector<thrust::pair<float, int>> k_neighbors;
+  brute_force_knn_search(*source_points, *source_points, k, k_neighbors, cloud_pose_map_vec, pose_indices);
+
+  if(!source_neighbors) {
+    source_neighbors.reset(new thrust::device_vector<int>(k_neighbors.size()));
+  } else {
+    source_neighbors->resize(k_neighbors.size());
+  }
+  thrust::transform(k_neighbors.begin(), k_neighbors.end(), source_neighbors->begin(), untie_pair_second());
+
+  // thrust::copy(
+  //   source_neighbors->begin(),
+  //   source_neighbors->end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+}
+
+bool FastGICPCudaCore::optimize_multi(float* source_cloud, 
+                                      int source_point_count, 
+                                      float* target_cloud, 
+                                      int target_point_count,
+                                      int* cloud_pose_map,
+                                      int num_poses,
+                                      Eigen::Isometry3f& estimated) {
+  
+  // Source cloud contains all points of all rendered poses
+  set_source_cloud_multi(source_cloud, source_point_count);
+  // set_target_cloud_multi(target_cloud, target_point_count);
+  thrust::device_vector<int> cloud_pose_map_vec(cloud_pose_map, cloud_pose_map + source_point_count);
+
+  // thrust::device_vector<Eigen::Vector3f> source_points;
+  // float* device_point_cloud;
+  // cudaMalloc(&device_point_cloud, 3 * source_point_count * sizeof(float));
+  // cudaMemcpy(device_point_cloud, source_cloud, 3 * source_point_count * sizeof(float), cudaMemcpyHostToDevice);
+  // create_eigen_cloud(device_point_cloud, source_point_count, source_points);
+  
+  // For source KNN need to know range of pose indices in source cloud array
+  // thrust::device_vector<int> pose_indices;
+  // extract_pose_indices(cloud_pose_map_vec, source_point_count, num_poses, pose_indices);
+  // // cudaFree(device_point_cloud);
+
+  // int k = 10; // number of correspondences
+  // thrust::device_vector<thrust::pair<float, int>> k_neighbors;
+  // brute_force_knn_search(*source_points, *source_points, k, k_neighbors, cloud_pose_map_vec, pose_indices);
+  // source_neighbors.reset(new thrust::device_vector<int>(k_neighbors.size()));
+  // thrust::transform(k_neighbors.begin(), k_neighbors.end(), source_neighbors->begin(), untie_pair_second());
+  find_source_neighbors_multi(10, cloud_pose_map, num_poses);
+  calculate_source_covariances(FROBENIUS);
+  // thrust::copy(
+  //   source_neighbors.begin(),
+  //   source_neighbors.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+
+  // thrust::device_vector<Eigen::Vector3f> target_points;
+  // cudaMalloc(&device_point_cloud, 3 * target_point_count * sizeof(float));
+  // cudaMemcpy(device_point_cloud, target_cloud, 3 * target_point_count * sizeof(float), cudaMemcpyHostToDevice);
+  // create_eigen_cloud(device_point_cloud, target_point_count, target_points);
+  set_target_cloud_multi(target_cloud, target_point_count);
+  find_target_neighbors(10);
+  calculate_target_covariances(FROBENIUS);
+
+  Eigen::Isometry3f initial_guess = Eigen::Isometry3f::Identity();
+  Eigen::Matrix<float, 6, 1> x0;
+  x0.head<3>() = Sophus::SO3f(initial_guess.linear()).log();
+  x0.tail<3>() = initial_guess.translation();
+
+  if(x0.head<3>().norm() < 1e-2) {
+    x0.head<3>() = (Eigen::Vector3f::Random()).normalized() * 1e-2;
+  }
+
+  thrust::device_vector<Eigen::Vector3f> losses;                            // 3N error vector
+  thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>> Js;    // RowMajor 3Nx6 -> ColMajor 6x3N
+
+  thrust::device_ptr<float> JJ_ptr = thrust::device_new<float>(6 * 6);
+  thrust::device_ptr<float> J_loss_ptr = thrust::device_new<float>(6);
+
+  // Get NN and loss
+  thrust::device_vector<thrust::pair<float, int>> k_neighbors;
+  // NN should take x0 also
+  brute_force_knn_search(*source_points, *target_points, 1, k_neighbors);
+  
+
+  thrust::device_vector<int> k_indices;
+  thrust::device_vector<float> k_distances;
+  k_indices.resize(k_neighbors.size());
+  k_distances.resize(k_neighbors.size());
+  thrust::transform(k_neighbors.begin(), k_neighbors.end(), k_indices.begin(), untie_pair_second());
+  thrust::transform(k_neighbors.begin(), k_neighbors.end(), k_distances.begin(), untie_pair_first());
+  // thrust::copy(
+  //   k_indices.begin(),
+  //   k_indices.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+  // printf("\n");
+
+  compute_derivatives_nn(*source_points, *source_covariances, 
+                         *target_points, *target_covariances,
+                         k_indices, k_distances, 0.05,
+                         x0, losses, Js);
+  thrust::copy(
+    losses.begin(),
+    losses.end(), 
+    std::ostream_iterator<Eigen::Vector3f>(std::cout, " ")
+  );
+  return false;
+} 
+
 
 }  // namespace fast_gicp

@@ -167,6 +167,33 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformation(PointCloudSou
   pcl::transformPointCloud(*input_, output, final_transformation_);
 }
 
+template<typename PointSource, typename PointTarget>
+void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* source_cloud, 
+                                              int source_point_count, 
+                                              float* target_cloud, 
+                                              int target_point_count,
+                                              int* cloud_pose_map,
+                                              int num_poses,
+                                              Eigen::Isometry3f& estimated) {
+
+  estimated = Eigen::Isometry3f::Identity();
+
+  vgicp_cuda->set_max_iterations(max_iterations_);
+  vgicp_cuda->set_rotation_epsilon(rotation_epsilon_);
+  vgicp_cuda->set_transformation_epsilon(transformation_epsilon_);
+  vgicp_cuda->set_resolution(voxel_resolution_);
+
+  converged_ = vgicp_cuda->optimize_multi(source_cloud,
+                                          source_point_count,
+                                          target_cloud,
+                                          target_point_count,
+                                          cloud_pose_map,
+                                          num_poses,
+                                          estimated);
+
+  final_transformation_ = estimated.matrix();
+}
+
 }  // namespace fast_gicp
 
 #endif
