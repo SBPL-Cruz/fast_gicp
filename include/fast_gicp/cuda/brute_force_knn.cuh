@@ -14,6 +14,8 @@
 #include <nvbio/basic/vector_view.h>
 #include <nvbio/basic/priority_queue.h>
 
+#include <sophus/so3.hpp>
+
 namespace fast_gicp {
 
 namespace {
@@ -21,20 +23,23 @@ namespace {
     neighborsearch_kernel(int k, 
                           const thrust::device_vector<Eigen::Vector3f>& target, 
                           thrust::device_vector<thrust::pair<float, int>>& k_neighbors,
-                          const thrust::device_vector<int>& source_pose_index_range)
+                          const thrust::device_vector<int>& source_pose_index_range,
+                          const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s)
         : k(k), 
           num_target_points(target.size()), 
           target_points_ptr(target.data()), 
           k_neighbors_ptr(k_neighbors.data()),
           source_pose_index_range_ptr(source_pose_index_range.data()),
-          source_pose_index_range_size(source_pose_index_range.size())
+          source_pose_index_range_size(source_pose_index_range.size()),
+          adjusted_x0s_ptr(adjusted_x0s.data()),
+          adjusted_x0s_size(adjusted_x0s.size())
     {}
 
     template<typename Tuple>
-    __host__ __device__ void operator()(const Tuple& idx_x) const {
+    __host__ __device__ void operator()(Tuple& idx_x) const {
       // threadIdx doesn't work because thrust split for_each in two loops
       int idx = thrust::get<0>(idx_x);
-      const Eigen::Vector3f& x = thrust::get<1>(idx_x);
+      Eigen::Vector3f x = thrust::get<1>(idx_x);
 
       // target points buffer & nn output buffer
       const Eigen::Vector3f* pts = thrust::raw_pointer_cast(target_points_ptr);
@@ -51,8 +56,6 @@ namespace {
       typedef nvbio::priority_queue<thrust::pair<float, int>, vector_type, compare_type> queue_type;
       queue_type queue(vector_type(0, k_neighbors - 1));
 
-      
-
       // for(int i = k; i < num_target_points; i++) {
       int low_i = 0;
       int high_i = num_target_points;
@@ -65,7 +68,26 @@ namespace {
         high_i = source_pose_index_range_ptr[point_pose_index + 1];
         // printf("Setting index range for point : %d, %d\n", low_i, high_i);
       }
-      
+
+      if (adjusted_x0s_size > 0)
+      {
+        // Transform the point to the adjusted pose
+        int point_pose_index = thrust::get<2>(idx_x);     
+        const Eigen::Matrix<float, 6, 1>& T_x = adjusted_x0s_ptr[point_pose_index];
+        Eigen::Matrix4f trans = Eigen::Matrix4f::Identity();
+        trans.block<3, 3>(0, 0) = Sophus::SO3f::exp(T_x.head<3>()).matrix();
+        trans.block<3, 1>(0, 3) = T_x.tail<3>();
+
+        Eigen::Vector4f x_h;
+        x_h[0] = x[0];
+        x_h[1] = x[1];
+        x_h[2] = x[2];
+        x_h[3] = 1;
+        x_h = trans * x_h;
+        x = x_h.head<3>();
+        // printf("x:%f, y:%f, z:%f\n", x[0], x[1], x[2]);
+      }
+
       for(int i = low_i; i < low_i + k; i++) {
         float sq_dist = (pts[i] - x).squaredNorm();
         queue.push(thrust::make_pair(sq_dist, i));
@@ -87,6 +109,8 @@ namespace {
     const int source_pose_index_range_size;
 
     thrust::device_ptr<thrust::pair<float, int>> k_neighbors_ptr;
+    thrust::device_ptr<const Eigen::Matrix<float, 6, 1>> adjusted_x0s_ptr;
+    const int adjusted_x0s_size;
   };
 
   struct sorting_kernel {
@@ -126,6 +150,7 @@ static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>&
                                    int k, thrust::device_vector<thrust::pair<float, int>>& k_neighbors, 
                                    const thrust::device_vector<int>& source_pose_map = thrust::device_vector<int>(0),
                                    const thrust::device_vector<int>& source_pose_index_range = thrust::device_vector<int>(0),
+                                   const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s = thrust::device_vector<Eigen::Matrix<float, 6, 1>>(0),
                                    bool do_sort=false) {
                                      
   thrust::device_vector<int> d_indices(source.size());
@@ -136,7 +161,9 @@ static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>&
 
   // nvbio::priority_queue requires (k + 1) working space
   k_neighbors.resize(source.size() * k, thrust::make_pair(-1.0f, -1));
-  thrust::for_each(first, last, neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range));
+  thrust::for_each(first, 
+                   last, 
+                   neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range, adjusted_x0s));
 
   if(do_sort) {
     thrust::for_each(d_indices.begin(), d_indices.end(), sorting_kernel(k, k_neighbors));

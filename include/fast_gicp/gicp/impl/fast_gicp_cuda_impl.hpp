@@ -174,9 +174,9 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
                                               int target_point_count,
                                               int* cloud_pose_map,
                                               int num_poses,
-                                              Eigen::Isometry3f& estimated) {
+                                              std::vector<Eigen::Isometry3f>& estimated) {
 
-  estimated = Eigen::Isometry3f::Identity();
+  // estimated = Eigen::Isometry3f::Identity();
 
   vgicp_cuda->set_max_iterations(max_iterations_);
   vgicp_cuda->set_rotation_epsilon(rotation_epsilon_);
@@ -191,7 +191,7 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
                                           num_poses,
                                           estimated);
 
-  final_transformation_ = estimated.matrix();
+  // final_transformation_ = estimated.matrix();
 }
 
 }  // namespace fast_gicp

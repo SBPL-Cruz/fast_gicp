@@ -77,7 +77,7 @@ public:
                                   int target_point_count,
                                   int* cloud_pose_map,
                                   int num_poses,
-                                  Eigen::Isometry3f& estimated);
+                                  std::vector<Eigen::Isometry3f>& estimated);
 
 protected:
   virtual void computeTransformation(PointCloudSource& output, const Matrix4& guess) override;

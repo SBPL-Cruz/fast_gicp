@@ -63,7 +63,7 @@ public:
                       int target_point_count,
                       int* cloud_pose_map,
                       int num_poses,
-                      Eigen::Isometry3f& estimated);
+                      std::vector<Eigen::Isometry3f>& estimated);
 
 private:
   bool is_converged(const Eigen::Matrix<float, 6, 1>& delta) const;
@@ -86,6 +86,9 @@ private:
   std::unique_ptr<Matrices> source_covariances;
   std::unique_ptr<Matrices> target_covariances;
 
+  std::unique_ptr<Indices> source_pose_indices; // point range for every pose
+  std::unique_ptr<Indices> source_pose_map; // pose index for every point
+  
   std::unique_ptr<GaussianVoxelMap> voxelmap;
 };
 

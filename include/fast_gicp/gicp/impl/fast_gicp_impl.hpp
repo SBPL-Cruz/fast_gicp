@@ -129,6 +129,7 @@ void FastGICP<PointSource, PointTarget>::computeTransformation(PointCloudSource&
     Eigen::VectorXf loss = loss_ls(x0, &J);
 
     Eigen::Matrix<float, 6, 1> delta = solver.delta(loss.cast<double>(), J.cast<double>()).cast<float>();
+    // std::cout << loss.size() << " " << J.size() << " " << delta << std::endl;
 
     x0.head<3>() = (Sophus::SO3f::exp(-delta.head<3>()) * Sophus::SO3f::exp(x0.head<3>())).log();
     x0.tail<3>() -= delta.tail<3>();
