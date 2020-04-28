@@ -23,6 +23,7 @@ struct compute_derivatives_nn_kernel {
                                 const float corr_dist_threshold,
                                 const thrust::device_vector<int>& src_pose_indices,
                                 const int max_points_per_pose,
+                                const thrust::device_vector<int>& pose_mask_icp,
                                 thrust::device_vector<Eigen::Vector3f>& losses, 
                                 thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>>& Js)
   : adjusted_x0s_ptr(adjusted_x0s.data()),
@@ -31,6 +32,8 @@ struct compute_derivatives_nn_kernel {
     corr_dist_threshold(corr_dist_threshold),
     src_pose_indices_ptr(src_pose_indices.data()),
     max_points_per_pose(max_points_per_pose),
+    pose_icp_mask_ptr(pose_mask_icp.data()),
+    pose_icp_mask_size(pose_mask_icp.size()),
     losses_ptr(losses.data()),
     Js_ptr(Js.data())
   {}
@@ -86,20 +89,25 @@ struct compute_derivatives_nn_kernel {
     J.block<3, 3>(0, 0) = RCR_inv * skew_mean_A;
     J.block<3, 3>(0, 3) = -RCR_inv;
 
-    const int strided_out_origin = pose_index * 1000;
+    // The location in loss array where loss of this pose starts
+    const int strided_out_origin = pose_index * max_points_per_pose;
 
-    // Subtract point location in array with where this pose begins in array
+    // Subtract point location in array with where this pose begins in array to get actual location of loss
     const int strided_out_index = point_index - src_pose_indices_ptr[pose_index];
     losses_ptr[strided_out_origin + strided_out_index] = loss;
     Js_ptr[strided_out_origin + strided_out_index] = J;
   }
-
+  // Inputs
   const float corr_dist_threshold;
   thrust::device_ptr<const Eigen::Vector3f> target_points_ptr;
   thrust::device_ptr<const Eigen::Matrix3f> target_covs_ptr;
   thrust::device_ptr<const int> src_pose_indices_ptr;
   thrust::device_ptr<const Eigen::Matrix<float, 6, 1>> adjusted_x0s_ptr;
   const int max_points_per_pose;
+  thrust::device_ptr<const int> pose_icp_mask_ptr;
+  const int pose_icp_mask_size;
+
+  // Outputs
   thrust::device_ptr<Eigen::Vector3f> losses_ptr;
   thrust::device_ptr<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>> Js_ptr;
 };
@@ -125,6 +133,7 @@ void compute_derivatives_nn(const thrust::device_vector<Eigen::Vector3f>& src_po
                             const thrust::device_vector<int>& src_pose_indices, const int num_poses,
                             const int max_points_per_pose,
                             const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s, 
+                            const thrust::device_vector<int>& pose_mask_icp,
                             thrust::device_vector<Eigen::Vector3f>& losses, 
                             thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>>& Js) {
   printf("compute_derivatives_nn() for %d poses\n", num_poses);
@@ -144,13 +153,11 @@ void compute_derivatives_nn(const thrust::device_vector<Eigen::Vector3f>& src_po
       src_points.begin(), src_covs.begin(),
       k_indices.begin(), k_distances.begin(),
       src_pose_map.begin(), d_indices.begin()
-      // losses.begin(), Js.begin()
     )),
     thrust::make_zip_iterator(thrust::make_tuple(
       src_points.end(), src_covs.end(),
       k_indices.end(), k_distances.end(),
       src_pose_map.end(), d_indices.end()
-      // losses.end(), Js.end()
     )),
     compute_derivatives_nn_kernel(adjusted_x0s, 
                                   target_points, 
@@ -158,6 +165,7 @@ void compute_derivatives_nn(const thrust::device_vector<Eigen::Vector3f>& src_po
                                   corr_dist_threshold, 
                                   src_pose_indices,
                                   max_points_per_pose,
+                                  pose_mask_icp,
                                   losses,
                                   Js)
   );

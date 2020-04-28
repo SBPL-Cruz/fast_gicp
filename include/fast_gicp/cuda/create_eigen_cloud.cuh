@@ -22,10 +22,10 @@ struct create_eigen_cloud_kernel {
     device_point_cloud(point_cloud)
   {}
 
-  // calculate derivatives
+  // Copy a raw 3D array of points into an eigen array of points
   template<typename Tuple>
   __host__ __device__ void operator() (Tuple tuple) const {
-    const uint cloud_idx = thrust::get<0>(tuple);
+    const int cloud_idx = thrust::get<0>(tuple);
     // printf("cloud_idx : %d\n", cloud_idx);
     Eigen::Vector3f& eigen_cloud_point = thrust::get<1>(tuple);
 
@@ -44,7 +44,7 @@ struct extract_pose_index_kernel {
   extract_pose_index_kernel()
   {}
 
-  // calculate derivatives
+  // Calculate indices where array value is not equal to previous value
   template<typename Tuple>
   __host__ __device__ void operator() (Tuple tuple) const {
     const int pose_index_next = thrust::get<0>(tuple);
@@ -55,7 +55,7 @@ struct extract_pose_index_kernel {
 
     if (pose_index_next != pose_index) 
     {
-      // Need to add one because next is 1 shifted
+      // Need to add one because next is 1 shifted, by adding one we get index in original point array
       uneq_array_elem = uneq_index + 1;
     }
 
@@ -83,8 +83,8 @@ void create_eigen_cloud(float* point_cloud,
   float nan = std::nanf("");
   thrust::fill(src_points.begin(), src_points.end(), Eigen::Vector3f::Constant(nan));
 
-  thrust::counting_iterator<uint> first(0);
-  thrust::counting_iterator<uint> last = first + src_points_count;
+  thrust::counting_iterator<int> first(0);
+  thrust::counting_iterator<int> last = first + src_points_count;
 
   thrust::for_each(
     thrust::make_zip_iterator( 
@@ -98,23 +98,22 @@ void create_eigen_cloud(float* point_cloud,
 }
 
 void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
-                        int cloud_point_count,
-                        int num_poses,
-                        thrust::device_vector<int>& unequal_indices) {
+                        const int cloud_point_count,
+                        const int num_poses,
+                        thrust::device_vector<int>& unequal_indices,
+                        int& max_pose_point_count) {
      
     thrust::device_vector<int> cloud_pose_map_next_vec;
     cloud_pose_map_next_vec.assign(cloud_pose_map_vec.begin() + 1, cloud_pose_map_vec.end());
     // Add last element to make length equal
     cloud_pose_map_next_vec.push_back(cloud_pose_map_vec.back());
 
-    thrust::counting_iterator<uint> first(0);
-    thrust::counting_iterator<uint> last = first + cloud_point_count;
+    thrust::counting_iterator<int> first(0);
+    thrust::counting_iterator<int> last = first + cloud_point_count;
 
-    // thrust::device_vector<int> unequal_indices(cloud_point_count, -1);
-    // unequal_indices.reset(new thrust::device_vector<int>(cloud_point_count));
-    // thrust::fill(unequal_indices.begin(), unequal_indices.end(), -1);
     unequal_indices.resize(cloud_point_count, -1);
 
+    // Calculate the indices in cloud array where the pose index changes (not equal to previous value)
     thrust::for_each(
     thrust::make_zip_iterator( 
         thrust::make_tuple(cloud_pose_map_next_vec.begin(), cloud_pose_map_vec.begin(), first, unequal_indices.begin()) 
@@ -128,13 +127,33 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
     unequal_indices.erase(thrust::remove_if(unequal_indices.begin(), unequal_indices.end(), is_invalid_kernel()), unequal_indices.end());
     unequal_indices.insert(unequal_indices.begin(), 0);
     unequal_indices.push_back(cloud_point_count);
+
+    // Calculate the maximum number of points from all poses
+    thrust::device_vector<int> unequal_indices_prev(unequal_indices.begin(), unequal_indices.end()-1);
+    thrust::device_vector<int> pose_point_count(unequal_indices_prev.size());
+    thrust::transform(
+        unequal_indices.begin() + 1, unequal_indices.end(), 
+        unequal_indices_prev.begin(), pose_point_count.begin(), 
+        thrust::minus<float>()
+    );
+    thrust::device_vector<int>::iterator max_elem_iter = thrust::max_element(pose_point_count.begin(), pose_point_count.end());
+
+    max_pose_point_count = pose_point_count[max_elem_iter - pose_point_count.begin()];
     // thrust::copy(
-    //   unequal_indices.begin(),
+    //   unequal_indices.begin() + 1,
     //   unequal_indices.end(), 
     //   std::ostream_iterator<int>(std::cout, " ")
     // );
+    // printf("\n");
+
+    // thrust::copy(
+    //   unequal_indices_prev.begin(),
+    //   unequal_indices_prev.end(), 
+    //   std::ostream_iterator<int>(std::cout, " ")
+    // );
+    // printf("\n");
     // Unequal size should be one higher since it contains both lower and upper limit for every pose
-    printf("Num poses : %d, size of unequal indices : %d\n", num_poses, unequal_indices.size());
+    printf("Num poses : %d, size of unequal indices : %d, max_point_count : %d\n", num_poses, unequal_indices.size(), max_pose_point_count);
 } // namespace fast_gicp
 
 }

@@ -5,6 +5,8 @@
 #include <thrust/device_new.h>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
+#include <cusolverDn.h>
+#include <cuda_runtime.h>
 
 #include <fast_gicp/cuda/brute_force_knn.cuh>
 #include <fast_gicp/cuda/covariance_estimation.cuh>
@@ -19,7 +21,6 @@ FastGICPCudaCore::FastGICPCudaCore() {
   // warming up GPU
   cudaDeviceSynchronize();
   cublasCreate(&cublas_handle);
-
   resolution = 1.0;
   max_iterations = 64;
   rotation_epsilon = 2e-3;
@@ -43,6 +44,10 @@ void FastGICPCudaCore::set_rotation_epsilon(double eps) {
 
 void FastGICPCudaCore::set_transformation_epsilon(double eps) {
   this->transformation_epsilon = eps;
+}
+
+void FastGICPCudaCore::set_correspondence_randomness(int k) {
+  this->k_correspondences = k;
 }
 
 void FastGICPCudaCore::swap_source_and_target() {
@@ -257,6 +262,7 @@ void FastGICPCudaCore::set_source_cloud_multi(float* source_cloud, int source_po
   cudaMemcpy(device_point_cloud, source_cloud, 3 * source_point_count * sizeof(float), cudaMemcpyHostToDevice);
   create_eigen_cloud(device_point_cloud, source_point_count, source_points_local);
 
+  // Store source points in class object
   thrust::host_vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> points(source_points_local.begin(), source_points_local.end());
   source_points.reset(new Points(points));
 }
@@ -282,7 +288,7 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k, int* cloud_pose_map, i
   // For source KNN need to know range of pose indices in source cloud array
   thrust::device_vector<int> cloud_pose_map_vec(cloud_pose_map, cloud_pose_map + source_point_count);
   thrust::device_vector<int> pose_indices;
-  extract_pose_indices(cloud_pose_map_vec, source_point_count, num_poses, pose_indices);
+  extract_pose_indices(cloud_pose_map_vec, source_point_count, num_poses, pose_indices, max_pose_point_count);
 
   // For each point in source array, KNN will be done within the pose index range
   thrust::device_vector<thrust::pair<float, int>> k_neighbors;
@@ -312,32 +318,14 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
                                       std::vector<Eigen::Isometry3f>& estimated) {
   
   std::chrono::time_point<std::chrono::system_clock> start, end;
+  int solver_type = 1;
   start = std::chrono::system_clock::now();
-  int k_correspondences = 10;
-  int max_points_per_pose = 1000;
-  estimated.resize(num_poses);
-  std::fill(estimated.begin(), estimated.end(), Eigen::Isometry3f::Identity());
-  // Source cloud contains all points of all rendered poses
+  estimated.resize(num_poses, Eigen::Isometry3f::Identity());
+
+  //// Source cloud, contains all points of all rendered poses
   set_source_cloud_multi(source_cloud, source_point_count);
-  // set_target_cloud_multi(target_cloud, target_point_count);
-  thrust::device_vector<int> cloud_pose_map_vec(cloud_pose_map, cloud_pose_map + source_point_count);
 
-  // thrust::device_vector<Eigen::Vector3f> source_points;
-  // float* device_point_cloud;
-  // cudaMalloc(&device_point_cloud, 3 * source_point_count * sizeof(float));
-  // cudaMemcpy(device_point_cloud, source_cloud, 3 * source_point_count * sizeof(float), cudaMemcpyHostToDevice);
-  // create_eigen_cloud(device_point_cloud, source_point_count, source_points);
-  
-  // For source KNN need to know range of pose indices in source cloud array
-  // thrust::device_vector<int> pose_indices;
-  // extract_pose_indices(cloud_pose_map_vec, source_point_count, num_poses, pose_indices);
-  // // cudaFree(device_point_cloud);
-
-  // int k = 10; // number of correspondences
-  // thrust::device_vector<thrust::pair<float, int>> k_neighbors;
-  // brute_force_knn_search(*source_points, *source_points, k, k_neighbors, cloud_pose_map_vec, pose_indices);
-  // source_neighbors.reset(new thrust::device_vector<int>(k_neighbors.size()));
-  // thrust::transform(k_neighbors.begin(), k_neighbors.end(), source_neighbors->begin(), untie_pair_second());
+  //// Below method finds neighbours, and various maps related to poses and stores them as class variables
   find_source_neighbors_multi(k_correspondences, cloud_pose_map, num_poses);
   calculate_source_covariances(FROBENIUS);
   // thrust::copy(
@@ -346,10 +334,7 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
   //   std::ostream_iterator<int>(std::cout, " ")
   // );
 
-  // thrust::device_vector<Eigen::Vector3f> target_points;
-  // cudaMalloc(&device_point_cloud, 3 * target_point_count * sizeof(float));
-  // cudaMemcpy(device_point_cloud, target_cloud, 3 * target_point_count * sizeof(float), cudaMemcpyHostToDevice);
-  // create_eigen_cloud(device_point_cloud, target_point_count, target_points);
+  //// Set target cloud
   set_target_cloud_multi(target_cloud, target_point_count);
   find_target_neighbors(k_correspondences);
   calculate_target_covariances(FROBENIUS);
@@ -365,13 +350,48 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
   }
   thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s(num_poses);
   thrust::fill(adjusted_x0s.begin(), adjusted_x0s.end(), x0);
-  // thrust::device_vector<Eigen::Matrix<float, 6, 6>> JJ;
-  // JJ.resize(num_poses);
-
+  
+  thrust::device_vector<int> mask_pose_icp(num_poses, 0); // stores if a pose should be masked from all kernels because it has converged or because loss became 0
+  
   thrust::device_ptr<float> JJ_ptr = thrust::device_new<float>(6 * 6 * num_poses);
   thrust::device_ptr<float> J_loss_ptr = thrust::device_new<float>(6 * num_poses);
-  /***** Iterate ******/
+  
+  thrust::host_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s_host(num_poses);
+  thrust::host_vector<int> mask_pose_icp_host(num_poses);
 
+  ///// Stuff for CUSOLVER
+  cusolverDnHandle_t handle = NULL;
+  cudaStream_t stream = NULL;
+  cusolverStatus_t status = CUSOLVER_STATUS_SUCCESS;
+  cudaError_t cudaStat1 = cudaSuccess;
+  cudaError_t cudaStat2 = cudaSuccess;
+  const cublasFillMode_t uplo = CUBLAS_FILL_MODE_LOWER;
+
+  status = cusolverDnCreate(&handle);
+  assert(CUSOLVER_STATUS_SUCCESS == status);
+
+  cudaStat1 = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  assert(cudaSuccess == cudaStat1);
+
+  status = cusolverDnSetStream(handle, stream);
+  assert(CUSOLVER_STATUS_SUCCESS == status);
+
+  float *Aarray[num_poses];
+  float *Barray[num_poses];
+
+  for (int p = 0; p < num_poses; p++)
+  {
+    cudaStat1 = cudaMalloc ((void**)&Aarray[p], sizeof(float) * 6 * 6);
+    cudaStat1 = cudaMalloc ((void**)&Barray[p], sizeof(float) * 6 * 1);
+  }
+
+  float** d_Aarray = NULL;
+  cudaMalloc ((void**)&d_Aarray, sizeof(float*) * num_poses);
+  float** d_Barray = NULL;
+  cudaStat2 = cudaMalloc ((void**)&d_Barray, sizeof(float*) * num_poses);
+  thrust::device_ptr<int> JJ_infoArray = thrust::device_new<int>(num_poses);
+
+  /***** ICP Iterate ******/
   for (int iter = 0; iter < max_iterations; iter++)
   {
     printf("ICP iteration : %d\n", iter);
@@ -387,7 +407,8 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
                           k_neighbors,
                           *source_pose_map,
                           thrust::device_vector<int>(0),
-                          adjusted_x0s);
+                          adjusted_x0s,
+                          mask_pose_icp);
     
 
     thrust::device_vector<int> k_indices;
@@ -413,8 +434,11 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
                           *target_points, *target_covariances,
                           k_indices, k_distances, 0.05,
                           *source_pose_map, *source_pose_indices, num_poses,
-                          max_points_per_pose,
-                          adjusted_x0s, losses, Js);
+                          max_pose_point_count,
+                          adjusted_x0s,
+                          mask_pose_icp,
+                          losses, 
+                          Js);
     // thrust::copy(
     //   losses.begin(),
     //   losses.end(), 
@@ -433,96 +457,159 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
     float beta = 0.0f;
 
     // int cols = 3 * losses.size();
-    int cols = 3 * max_points_per_pose;
+    int cols = 3 * max_pose_point_count;
     float* Js_ptr = thrust::reinterpret_pointer_cast<float*>(Js.data());
     // Computing J x J^T (J is 3 * 1000 * num_poses X 6 in row major format)
     cublasSgemmStridedBatched(cublas_handle, 
                               CUBLAS_OP_N, CUBLAS_OP_T, 
                               6, 6, cols, 
                               &alpha, 
-                              Js_ptr, 6, 18 * max_points_per_pose,
-                              Js_ptr, 6, 18 * max_points_per_pose,
+                              Js_ptr, 6, 18 * max_pose_point_count,
+                              Js_ptr, 6, 18 * max_pose_point_count,
                               &beta, 
                               thrust::raw_pointer_cast(JJ_ptr), 6, 36,
                               num_poses);
 
     float* loss_ptr = thrust::reinterpret_pointer_cast<float*>(losses.data());
-    // cublasSgemv(cublas_handle, CUBLAS_OP_N, 6, cols, &alpha, Js_ptr, 6, loss_ptr, 1, &beta, thrust::raw_pointer_cast(J_loss_ptr), 1);
+
     // Computing J x L
     // typedef Matrix<float, 3, 1> Vector3f;
     cublasSgemmStridedBatched(cublas_handle, 
                               CUBLAS_OP_N, CUBLAS_OP_N, 
                               6, 1, cols, 
                               &alpha, 
-                              Js_ptr, 6, 18 * max_points_per_pose,
-                              loss_ptr, cols, 3 * max_points_per_pose,
+                              Js_ptr, 6, 18 * max_pose_point_count,
+                              loss_ptr, cols, 3 * max_pose_point_count,
                               &beta, 
                               thrust::raw_pointer_cast(J_loss_ptr), 6, 6,
                               num_poses);
-
-    // for (int i = 0; i < num_poses * 6 * 6; i++)
-    // {
-    //   std::cout << JJ_ptr[i] << " ";
-    // }
-    thrust::host_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s_host = adjusted_x0s;
-
-    // #pragma omp parallel for
-    for (int i = 0; i < num_poses; i++)
+    
+    if (solver_type == 1)
     {
-      // std::cout << J_loss_ptr[i] << " ";
-      // std::cout << "Doing pose " << i << std::endl;
-      Eigen::Matrix<float, 6, 6> JJ;
-      cublasGetMatrix(6, 6, sizeof(float), thrust::raw_pointer_cast(JJ_ptr) + 6 * 6 * i, 6, JJ.data(), 6);
-      // std::cout << JJ << std::endl;
-      if (JJ.isZero()) continue;
-
-      Eigen::Matrix<float, 6, 1> J_loss;
-      cublasGetMatrix(6, 1, sizeof(float), thrust::raw_pointer_cast(J_loss_ptr) + 6 * i, 6, J_loss.data(), 6);
-      // std::cout << J_loss << std::endl;
-
-      Eigen::Matrix<float, 6, 1> delta = JJ.llt().solve(J_loss);
-      // std::cout << delta << std::endl;
-      if(!is_converged(delta)) {
-        Eigen::Matrix<float, 6, 1> x0 = adjusted_x0s_host[i];
-        adjusted_x0s_host[i].head<3>() = (Sophus::SO3f::exp(-delta.head<3>()) * Sophus::SO3f::exp(x0.head<3>())).log();
-        adjusted_x0s_host[i].tail<3>() -= delta.tail<3>();
-      }
-      else
+      adjusted_x0s_host = adjusted_x0s;
+      mask_pose_icp_host = mask_pose_icp;
+      for (int p = 0; p < num_poses; p++)
       {
-        if (iter == max_iterations-1){
-          printf("Pose ICP converged : %d\n", i);
+        Aarray[p] = thrust::raw_pointer_cast(JJ_ptr) + 6 * 6 * p;
+        Barray[p] = thrust::raw_pointer_cast(J_loss_ptr) + 6 * p;
+      }
+      cudaMemcpy(d_Aarray, Aarray, sizeof(float*) * num_poses, cudaMemcpyHostToDevice);
+      // Do cholesky decomposition with lower trinagle of A
+      status = cusolverDnSpotrfBatched(
+          handle,
+          uplo,
+          6,
+          d_Aarray,
+          6,
+          thrust::raw_pointer_cast(JJ_infoArray),
+          num_poses);
+      
+      cudaStat2 = cudaMemcpy(d_Barray, Barray, sizeof(float*)*num_poses, cudaMemcpyHostToDevice);
+      // Solve equation JJ^T X = JL
+      status = cusolverDnSpotrsBatched(
+        handle,
+        uplo,
+        6,
+        1, /* only support rhs = 1*/
+        d_Aarray,
+        6,
+        d_Barray,
+        6,
+        thrust::raw_pointer_cast(JJ_infoArray),
+        num_poses);
+
+      adjusted_x0s_host = adjusted_x0s;
+      mask_pose_icp_host = mask_pose_icp;
+
+      // #pragma omp parallel for
+      for (int i = 0; i < num_poses; i++)
+      {
+        if (mask_pose_icp_host[i] == 1) {
+          continue;
+        }
+        Eigen::Matrix<float, 6, 1> delta_host;
+        // std::cout << "Delta CUDA" << delta_host << std::endl;
+
+        cublasGetMatrix(6, 1, sizeof(float), Barray[i], 6, delta_host.data(), 6);
+        if (std::isnan(delta_host(0,0))) {
+          mask_pose_icp_host[i] == 1;
+          continue;
+        } 
+
+        if(!is_converged(delta_host)) {
+          Eigen::Matrix<float, 6, 1> x0 = adjusted_x0s_host[i];
+          adjusted_x0s_host[i].head<3>() = (Sophus::SO3f::exp(-delta_host.head<3>()) * Sophus::SO3f::exp(x0.head<3>())).log();
+          adjusted_x0s_host[i].tail<3>() -= delta_host.tail<3>();
+        }
+        else
+        {
+          mask_pose_icp_host[i] = 1;
+          printf("Pose ICP converged : %d, solver : %d\n", i, solver_type);
           std::cout << adjusted_x0s_host[i] << std::endl;
-          // Eigen::Isometry3f final_estimated;
           Eigen::Matrix4f trans = Eigen::Matrix4f::Identity();
           trans.block<3, 3>(0, 0) = Sophus::SO3f::exp(adjusted_x0s_host[i].head<3>()).matrix();
           trans.block<3, 1>(0, 3) = adjusted_x0s_host[i].tail<3>();
           estimated[i].matrix() = trans;
         }
       }
+      adjusted_x0s = adjusted_x0s_host;
+      mask_pose_icp = mask_pose_icp_host;
     }
-    adjusted_x0s = adjusted_x0s_host;
+    else if (solver_type == 0)
+    {
+      adjusted_x0s_host = adjusted_x0s;
+      mask_pose_icp_host = mask_pose_icp;
+
+      for (int i = 0; i < num_poses; i++)
+      {
+        if (mask_pose_icp_host[i] == 1) {
+          continue;
+        }
+        
+        // std::cout << J_loss_ptr[i] << " ";
+        // std::cout << "Doing pose " << i << std::endl;
+        Eigen::Matrix<float, 6, 6> JJ;
+        cublasGetMatrix(6, 6, sizeof(float), thrust::raw_pointer_cast(JJ_ptr) + 6 * 6 * i, 6, JJ.data(), 6);
+        // std::cout << JJ << std::endl;
+        // if (JJ.isZero()) continue;
+
+        Eigen::Matrix<float, 6, 1> J_loss;
+        cublasGetMatrix(6, 1, sizeof(float), thrust::raw_pointer_cast(J_loss_ptr) + 6 * i, 6, J_loss.data(), 6);
+        // std::cout << J_loss << std::endl;
+
+        if (JJ.isZero() || J_loss.isZero()) {
+          mask_pose_icp_host[i] = 1;
+          continue;
+        }
+
+        Eigen::Matrix<float, 6, 1> delta = JJ.llt().solve(J_loss);
+
+        if(!is_converged(delta)) {
+          Eigen::Matrix<float, 6, 1> x0 = adjusted_x0s_host[i];
+          adjusted_x0s_host[i].head<3>() = (Sophus::SO3f::exp(-delta.head<3>()) * Sophus::SO3f::exp(x0.head<3>())).log();
+          adjusted_x0s_host[i].tail<3>() -= delta.tail<3>();
+        }
+        else
+        {
+          mask_pose_icp_host[i] = 1;
+          // if (iter == max_iterations-1)
+          // {
+          printf("Pose ICP converged : %d, solver : %d\n", i, solver_type);
+          std::cout << adjusted_x0s_host[i] << std::endl;
+          // Eigen::Isometry3f final_estimated;
+          Eigen::Matrix4f trans = Eigen::Matrix4f::Identity();
+          trans.block<3, 3>(0, 0) = Sophus::SO3f::exp(adjusted_x0s_host[i].head<3>()).matrix();
+          trans.block<3, 1>(0, 3) = adjusted_x0s_host[i].tail<3>();
+          estimated[i].matrix() = trans;
+          // }
+        }
+      }
+      adjusted_x0s = adjusted_x0s_host;
+      mask_pose_icp = mask_pose_icp_host;
+    }
   }
-  // thrust::device_vector<thrust::device_ptr<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>>> Js_batched;
-  // Js_batched.resize(num_poses);
-  // for (int i = 0; i < num_poses; i++) {
-  //   // losses_batched[i].reset(new thrust::device_vector<Eigen::Vector3f>(1000));
-  //   thrust::device_vector<Eigen::Matrix<float, 3, 6, Eigen::RowMajor>> temp_vec(
-  //     1000, Eigen::Matrix<float, 3, 6, Eigen::RowMajor>::Constant(0)
-  //   );
-  //   Js_batched[i] = temp_vec.data();
-  // }
-
-  // for (int i = 0; i < source_point_count; i++)
-  // {
-  //   int pose_i = cloud_pose_map[i];
-  //   int low_i = (*source_pose_indices)[pose_i];
-  //   int high_i = (*source_pose_indices)[pose_i + 1];
-  //   // *(Js_batched[pose_i])[i - low_i] = Js[i];
-  //   // for (int k = low_i; k < high_i; k++)
-  //   // {
-
-  //   // }
-  // }
+  cudaFree(d_Aarray);
+  cudaFree(d_Barray);
   end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end-start;
   printf("*************ICP time : %f*************\n", elapsed_seconds.count());

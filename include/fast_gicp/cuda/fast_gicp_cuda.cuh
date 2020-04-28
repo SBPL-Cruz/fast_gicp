@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <vector>
+#include <cmath>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -36,6 +37,7 @@ public:
   void set_max_iterations(int itr);
   void set_rotation_epsilon(double eps);
   void set_transformation_epsilon(double eps);
+  void set_correspondence_randomness(int k);
 
   void swap_source_and_target();
   void set_source_cloud(const std::vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>>& cloud);
@@ -70,12 +72,13 @@ private:
 
 private:
   cublasContext* cublas_handle;
-
+  
   double resolution;
 
   int max_iterations;
   double rotation_epsilon;
   double transformation_epsilon;
+  int k_correspondences;
 
   std::unique_ptr<Points> source_points;
   std::unique_ptr<Points> target_points;
@@ -88,7 +91,8 @@ private:
 
   std::unique_ptr<Indices> source_pose_indices; // point range for every pose
   std::unique_ptr<Indices> source_pose_map; // pose index for every point
-  
+  int max_pose_point_count; // maximum number of points amongst all poses, used to decide stride value of batch GEMM multiplication
+
   std::unique_ptr<GaussianVoxelMap> voxelmap;
 };
 

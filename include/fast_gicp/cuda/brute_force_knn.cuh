@@ -24,7 +24,8 @@ namespace {
                           const thrust::device_vector<Eigen::Vector3f>& target, 
                           thrust::device_vector<thrust::pair<float, int>>& k_neighbors,
                           const thrust::device_vector<int>& source_pose_index_range,
-                          const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s)
+                          const thrust::device_vector<Eigen::Matrix<float, 6, 1>>& adjusted_x0s,
+                          const thrust::device_vector<int>& pose_mask_icp)
         : k(k), 
           num_target_points(target.size()), 
           target_points_ptr(target.data()), 
@@ -32,7 +33,9 @@ namespace {
           source_pose_index_range_ptr(source_pose_index_range.data()),
           source_pose_index_range_size(source_pose_index_range.size()),
           adjusted_x0s_ptr(adjusted_x0s.data()),
-          adjusted_x0s_size(adjusted_x0s.size())
+          adjusted_x0s_size(adjusted_x0s.size()),
+          pose_icp_mask_ptr(pose_mask_icp.data()),
+          pose_icp_mask_size(pose_mask_icp.size())
     {}
 
     template<typename Tuple>
@@ -41,6 +44,14 @@ namespace {
       int idx = thrust::get<0>(idx_x);
       Eigen::Vector3f x = thrust::get<1>(idx_x);
 
+      // if (pose_icp_mask_size > 0) {
+      //   int point_pose_index = thrust::get<2>(idx_x);     
+      //   // printf("point_pose_index : %d\n", point_pose_index); 
+      //   // printf("pose_icp_mask_ptr : %d\n", pose_icp_mask_ptr[point_pose_index]); 
+      //   // printf("pose_icp_mask : %d, point_pose_index : %d\n", pose_icp_mask_ptr[point_pose_index], point_pose_index);
+      //   // if (pose_icp_mask_ptr[point_pose_index] == 1) return;
+      // }
+      // Make a queue and sort according to distance from each target point
       // target points buffer & nn output buffer
       const Eigen::Vector3f* pts = thrust::raw_pointer_cast(target_points_ptr);
       thrust::pair<float, int>* k_neighbors = thrust::raw_pointer_cast(k_neighbors_ptr) + idx * k;
@@ -60,8 +71,7 @@ namespace {
       int low_i = 0;
       int high_i = num_target_points;
       // If pose range info is there
-      if (source_pose_index_range_size > 0)
-      {
+      if (source_pose_index_range_size > 0) {
         // Get pose index of current point
         int point_pose_index = thrust::get<2>(idx_x);     
         low_i = source_pose_index_range_ptr[point_pose_index];
@@ -69,10 +79,10 @@ namespace {
         // printf("Setting index range for point : %d, %d\n", low_i, high_i);
       }
 
-      if (adjusted_x0s_size > 0)
-      {
+      if (adjusted_x0s_size > 0) {
         // Transform the point to the adjusted pose
-        int point_pose_index = thrust::get<2>(idx_x);     
+        int point_pose_index = thrust::get<2>(idx_x);    
+        // printf("point_pose_index : %d\n", point_pose_index); 
         const Eigen::Matrix<float, 6, 1>& T_x = adjusted_x0s_ptr[point_pose_index];
         Eigen::Matrix4f trans = Eigen::Matrix4f::Identity();
         trans.block<3, 3>(0, 0) = Sophus::SO3f::exp(T_x.head<3>()).matrix();
@@ -111,6 +121,9 @@ namespace {
     thrust::device_ptr<thrust::pair<float, int>> k_neighbors_ptr;
     thrust::device_ptr<const Eigen::Matrix<float, 6, 1>> adjusted_x0s_ptr;
     const int adjusted_x0s_size;
+
+    thrust::device_ptr<const int> pose_icp_mask_ptr;
+    const int pose_icp_mask_size;
   };
 
   struct sorting_kernel {
@@ -147,12 +160,28 @@ namespace {
 
 static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>& source, 
                                    const thrust::device_vector<Eigen::Vector3f>& target, 
-                                   int k, thrust::device_vector<thrust::pair<float, int>>& k_neighbors, 
+                                   int k, 
+                                   thrust::device_vector<thrust::pair<float, int>>& k_neighbors, 
                                    const thrust::device_vector<int>& source_pose_map = thrust::device_vector<int>(0),
                                    const thrust::device_vector<int>& source_pose_index_range = thrust::device_vector<int>(0),
                                    const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s = thrust::device_vector<Eigen::Matrix<float, 6, 1>>(0),
+                                   const thrust::device_vector<int>& pose_mask_icp = thrust::device_vector<int>(0),                                   
                                    bool do_sort=false) {
-                                     
+  /*
+   * source_pose_map : the pose index of every point in source
+   * source_pose_index_range : target index range to use for every pose in source_pose_map
+   * adjusted_x0s : the transform to apply to a point in source before computing distance
+   */
+  printf("pose_mask_icp size : %d\n", pose_mask_icp.size());
+  printf("adjusted_x0s size : %d\n", adjusted_x0s.size());
+  printf("source_pose_index_range size : %d\n", source_pose_index_range.size());
+  printf("source_pose_map size : %d\n", source_pose_map.size());
+  // thrust::copy(
+  //   pose_mask_icp.begin(),
+  //   pose_mask_icp.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );  
+  // printf("\n");
   thrust::device_vector<int> d_indices(source.size());
   thrust::sequence(d_indices.begin(), d_indices.end());
 
@@ -161,9 +190,8 @@ static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>&
 
   // nvbio::priority_queue requires (k + 1) working space
   k_neighbors.resize(source.size() * k, thrust::make_pair(-1.0f, -1));
-  thrust::for_each(first, 
-                   last, 
-                   neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range, adjusted_x0s));
+  thrust::for_each(first, last, 
+                   neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range, adjusted_x0s, pose_mask_icp));
 
   if(do_sort) {
     thrust::for_each(d_indices.begin(), d_indices.end(), sorting_kernel(k, k_neighbors));

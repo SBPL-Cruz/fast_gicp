@@ -85,6 +85,7 @@ if(CUDA_FOUND)
   )
   target_link_libraries(fast_vgicp_cuda
     cublas
+    cusolver
   )
 
   # add vgicp_cuda to libfast_gicp

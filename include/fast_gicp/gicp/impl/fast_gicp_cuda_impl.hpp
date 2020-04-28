@@ -182,6 +182,7 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
   vgicp_cuda->set_rotation_epsilon(rotation_epsilon_);
   vgicp_cuda->set_transformation_epsilon(transformation_epsilon_);
   vgicp_cuda->set_resolution(voxel_resolution_);
+  vgicp_cuda->set_correspondence_randomness(k_correspondences_);
 
   converged_ = vgicp_cuda->optimize_multi(source_cloud,
                                           source_point_count,
