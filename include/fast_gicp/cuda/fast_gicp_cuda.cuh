@@ -57,13 +57,16 @@ public:
   bool optimize(const Eigen::Isometry3f& initial_guess, Eigen::Isometry3f& estimated);
 
   void set_source_cloud_multi(float* point_cloud, int point_count);
-  void set_target_cloud_multi(float* point_cloud, int point_count);
-  void find_source_neighbors_multi(int k, int* cloud_pose_map, int num_poses);
+  void set_target_cloud_multi(float* point_cloud, int point_count, int* target_cloud_label);
+  void find_source_neighbors_multi(int k, int* cloud_pose_map, int* source_pose_label_map, int num_poses);
+  void find_target_neighbors_multi(int k, int num_poses);
   bool optimize_multi(float* source_cloud, 
                       int source_point_count, 
                       float* target_cloud, 
                       int target_point_count,
                       int* cloud_pose_map,
+                      int* target_cloud_label,
+                      int* source_pose_label_map,
                       int num_poses,
                       std::vector<Eigen::Isometry3f>& estimated);
 
@@ -90,8 +93,12 @@ private:
   std::unique_ptr<Matrices> target_covariances;
 
   std::unique_ptr<Indices> source_pose_indices; // point range for every pose
-  std::unique_ptr<Indices> source_pose_map; // pose index for every point
+  std::unique_ptr<Indices> source_pose_map; // pose index for every point, should be sorted
+  std::unique_ptr<Indices> source_label_map; // label index for every point, computed before icp
   int max_pose_point_count; // maximum number of points amongst all poses, used to decide stride value of batch GEMM multiplication
+
+  std::unique_ptr<Indices> target_label_indices; // label index rabge for every kabek
+  std::unique_ptr<Indices> target_label_map; // sorted label index for every point in target
 
   std::unique_ptr<GaussianVoxelMap> voxelmap;
 };

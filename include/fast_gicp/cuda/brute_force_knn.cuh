@@ -16,6 +16,8 @@
 
 #include <sophus/so3.hpp>
 
+#include <chrono>
+
 namespace fast_gicp {
 
 namespace {
@@ -44,13 +46,13 @@ namespace {
       int idx = thrust::get<0>(idx_x);
       Eigen::Vector3f x = thrust::get<1>(idx_x);
 
-      // if (pose_icp_mask_size > 0) {
-      //   int point_pose_index = thrust::get<2>(idx_x);     
-      //   // printf("point_pose_index : %d\n", point_pose_index); 
-      //   // printf("pose_icp_mask_ptr : %d\n", pose_icp_mask_ptr[point_pose_index]); 
-      //   // printf("pose_icp_mask : %d, point_pose_index : %d\n", pose_icp_mask_ptr[point_pose_index], point_pose_index);
-      //   // if (pose_icp_mask_ptr[point_pose_index] == 1) return;
-      // }
+      if (pose_icp_mask_size > 0) {
+        int point_pose_index = thrust::get<2>(idx_x);     
+        // printf("point_pose_index : %d\n", point_pose_index); 
+        // printf("pose_icp_mask_ptr : %d\n", pose_icp_mask_ptr[point_pose_index]); 
+        // printf("pose_icp_mask : %d, point_pose_index : %d\n", pose_icp_mask_ptr[point_pose_index], point_pose_index);
+        if (pose_icp_mask_ptr[point_pose_index] == 1) return;
+      }
       // Make a queue and sort according to distance from each target point
       // target points buffer & nn output buffer
       const Eigen::Vector3f* pts = thrust::raw_pointer_cast(target_points_ptr);
@@ -73,9 +75,10 @@ namespace {
       // If pose range info is there
       if (source_pose_index_range_size > 0) {
         // Get pose index of current point
-        int point_pose_index = thrust::get<2>(idx_x);     
-        low_i = source_pose_index_range_ptr[point_pose_index];
-        high_i = source_pose_index_range_ptr[point_pose_index + 1];
+        int target_range_index = thrust::get<3>(idx_x);     
+        // printf("target_range_index : %d\n", target_range_index);
+        low_i  = source_pose_index_range_ptr[target_range_index];
+        high_i = source_pose_index_range_ptr[target_range_index + 1];
         // printf("Setting index range for point : %d, %d\n", low_i, high_i);
       }
 
@@ -162,41 +165,71 @@ static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>&
                                    const thrust::device_vector<Eigen::Vector3f>& target, 
                                    int k, 
                                    thrust::device_vector<thrust::pair<float, int>>& k_neighbors, 
+                                   const thrust::device_vector<int>& source_target_index_map = thrust::device_vector<int>(0),
+                                   const thrust::device_vector<int>& target_index_range = thrust::device_vector<int>(0),
                                    const thrust::device_vector<int>& source_pose_map = thrust::device_vector<int>(0),
-                                   const thrust::device_vector<int>& source_pose_index_range = thrust::device_vector<int>(0),
                                    const thrust::device_vector<Eigen::Matrix<float, 6, 1>> adjusted_x0s = thrust::device_vector<Eigen::Matrix<float, 6, 1>>(0),
                                    const thrust::device_vector<int>& pose_mask_icp = thrust::device_vector<int>(0),                                   
                                    bool do_sort=false) {
   /*
-   * source_pose_map : the pose index of every point in source
-   * source_pose_index_range : target index range to use for every pose in source_pose_map
-   * adjusted_x0s : the transform to apply to a point in source before computing distance
+   * Below two can be provided to apply transformation before doing NN:
+   *  - adjusted_x0s - transformation to apply to source point before computing distance
+   *  - source_pose_map : the pose index of every point in source, maps it to a transform in adjusted_x0s
+   * Below two can be provided to speed up KNN by searching segments of target array: 
+   *  - source_target_index_map : a mapping from source point to a target index which determines the range in target to search over
+   *  - target_index_range : target index range to use for every pose in source_pose_map
+   *  - adjusted_x0s : the transform to apply to a point in source before computing distance
    */
+  // assert(source_target_index_map.size() == source.size());
+  // assert(source_pose_map.size() == source.size());
+  std::chrono::time_point<std::chrono::system_clock> start, end;
+  start = std::chrono::system_clock::now();
+  printf("target size : %d\n", target.size());
   printf("pose_mask_icp size : %d\n", pose_mask_icp.size());
   printf("adjusted_x0s size : %d\n", adjusted_x0s.size());
-  printf("source_pose_index_range size : %d\n", source_pose_index_range.size());
+  printf("target_index_range size : %d\n", target_index_range.size());
   printf("source_pose_map size : %d\n", source_pose_map.size());
+  printf("source_target_index_map size : %d\n", source_target_index_map.size());
   // thrust::copy(
   //   pose_mask_icp.begin(),
   //   pose_mask_icp.end(), 
   //   std::ostream_iterator<int>(std::cout, " ")
   // );  
   // printf("\n");
+  // thrust::copy(
+  //   source_target_index_map.begin(),
+  //   source_target_index_map.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );  
+  // printf("\n");
+  // thrust::copy(
+  //   target_index_range.begin(),
+  //   target_index_range.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );  
+  // printf("\n");
   thrust::device_vector<int> d_indices(source.size());
   thrust::sequence(d_indices.begin(), d_indices.end());
 
-  auto first = thrust::make_zip_iterator(thrust::make_tuple(d_indices.begin(), source.begin(), source_pose_map.begin()));
-  auto last = thrust::make_zip_iterator(thrust::make_tuple(d_indices.end(), source.end(), source_pose_map.end()));
+  auto first = thrust::make_zip_iterator(thrust::make_tuple(d_indices.begin(), source.begin(), source_pose_map.begin(), source_target_index_map.begin()));
+  auto last = thrust::make_zip_iterator(thrust::make_tuple(d_indices.end(), source.end(), source_pose_map.end(), source_target_index_map.end()));
 
   // nvbio::priority_queue requires (k + 1) working space
-  k_neighbors.resize(source.size() * k, thrust::make_pair(-1.0f, -1));
+  if (k_neighbors.size() == 0) {
+    k_neighbors.resize(source.size() * k, thrust::make_pair(-1.0f, -1));
+  } else {
+    thrust::fill(k_neighbors.begin(), k_neighbors.end(), thrust::make_pair(-1.0f, -1));
+  }
   thrust::for_each(first, last, 
-                   neighborsearch_kernel(k, target, k_neighbors, source_pose_index_range, adjusted_x0s, pose_mask_icp));
+                   neighborsearch_kernel(k, target, k_neighbors, target_index_range, adjusted_x0s, pose_mask_icp));
 
   if(do_sort) {
     thrust::for_each(d_indices.begin(), d_indices.end(), sorting_kernel(k, k_neighbors));
   }
-  printf("brute_force_knn_search() done\n");
+  end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+
+  printf("brute_force_knn_search() done, took : %f\n", elapsed_seconds.count());
 }
 
 } // namespace fast_gicp

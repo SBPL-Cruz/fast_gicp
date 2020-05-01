@@ -58,7 +58,13 @@ struct compute_derivatives_nn_kernel {
     const Eigen::Matrix3f& cov_A = thrust::get<1>(tuple);
     const int pose_index = thrust::get<4>(tuple);
     const int point_index = thrust::get<5>(tuple);
-
+    if (pose_icp_mask_size > 0) {
+        // int point_pose_index = thrust::get<2>(idx_x);     
+        // printf("point_pose_index : %d\n", point_pose_index); 
+        // printf("pose_icp_mask_ptr : %d\n", pose_icp_mask_ptr[point_pose_index]); 
+        // printf("pose_icp_mask : %d, point_pose_index : %d\n", pose_icp_mask_ptr[point_pose_index], point_pose_index);
+        if (pose_icp_mask_ptr[pose_index] == 1) return;
+    }
     const int target_index = thrust::get<2>(tuple);
     const float target_distance = thrust::get<3>(tuple);
     if (target_distance > corr_dist_threshold * corr_dist_threshold) {
@@ -140,8 +146,8 @@ void compute_derivatives_nn(const thrust::device_vector<Eigen::Vector3f>& src_po
   float nan = std::nanf("");
   // losses.resize(src_points.size());
   // Js.resize(src_points.size());
-  Js.resize(max_points_per_pose * num_poses);
-  losses.resize(max_points_per_pose * num_poses);
+  // Js.resize(max_points_per_pose * num_poses);
+  // losses.resize(max_points_per_pose * num_poses);
   thrust::fill(losses.begin(), losses.end(), Eigen::Vector3f::Constant(0));
   thrust::fill(Js.begin(), Js.end(), Eigen::Matrix<float, 3, 6>::Constant(0));
 

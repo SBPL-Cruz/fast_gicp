@@ -102,7 +102,10 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
                         const int num_poses,
                         thrust::device_vector<int>& unequal_indices,
                         int& max_pose_point_count) {
-     
+    /* Extract the ranges in cloud array for every pose to restrict nearest neighbour to within that range
+     * cloud_pose_map_vec - contains mapping of every point to a pose index
+     *
+     */
     thrust::device_vector<int> cloud_pose_map_next_vec;
     cloud_pose_map_next_vec.assign(cloud_pose_map_vec.begin() + 1, cloud_pose_map_vec.end());
     // Add last element to make length equal

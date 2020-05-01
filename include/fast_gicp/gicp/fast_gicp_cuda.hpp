@@ -76,6 +76,8 @@ public:
                                   float* target_cloud, 
                                   int target_point_count,
                                   int* cloud_pose_map,
+                                  int* target_cloud_label,
+                                  int* source_pose_label_map,
                                   int num_poses,
                                   std::vector<Eigen::Isometry3f>& estimated);
 

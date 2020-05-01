@@ -173,6 +173,8 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
                                               float* target_cloud, 
                                               int target_point_count,
                                               int* cloud_pose_map,
+                                              int* target_cloud_label,
+                                              int* source_pose_label_map,
                                               int num_poses,
                                               std::vector<Eigen::Isometry3f>& estimated) {
 
@@ -189,6 +191,8 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
                                           target_cloud,
                                           target_point_count,
                                           cloud_pose_map,
+                                          target_cloud_label,
+                                          source_pose_label_map,
                                           num_poses,
                                           estimated);
 
