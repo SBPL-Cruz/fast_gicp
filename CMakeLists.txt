@@ -84,8 +84,10 @@ if(CUDA_FOUND)
     thirdparty/nvbio
   )
   target_link_libraries(fast_vgicp_cuda
-    cublas
-    cusolver
+    # cublas
+    # cusolver
+    ${CUDA_cusolver_LIBRARY}
+    ${CUDA_cublas_LIBRARY}
   )
 
   # add vgicp_cuda to libfast_gicp
