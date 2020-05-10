@@ -19,6 +19,17 @@
 #include <chrono>
 
 namespace fast_gicp {
+  struct untie_pair_second {
+    __device__ int operator() (thrust::pair<float, int>& p) const {
+      return p.second;
+    }
+  };
+
+  struct untie_pair_first {
+    __device__ float operator() (thrust::pair<float, int>& p) const {
+      return p.first;
+    }
+  };
 
 namespace {
   struct neighborsearch_kernel {

@@ -10,5 +10,6 @@
 
   <buildtool_depend>catkin</buildtool_depend>
   <export>
+      <cpp lflags="-Wl,-rpath,${prefix}/lib -L${prefix}/lib -lfast_gicp" cflags="-I${prefix}/include -O3 -DROS"/>
   </export>
 </package>

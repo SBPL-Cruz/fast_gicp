@@ -31,7 +31,10 @@ endif()
 ## catkin specific configuration ##
 ###################################
 catkin_package(
-  INCLUDE_DIRS include thirdparty/Sophus
+  INCLUDE_DIRS 
+    include 
+    thirdparty/Sophus
+    thirdparty/nvbio
   LIBRARIES fast_gicp
 #  CATKIN_DEPENDS other_catkin_pkg
 #  DEPENDS system_lib
@@ -77,7 +80,7 @@ if(CUDA_FOUND)
     # src/fast_gicp/cuda/fast_vgicp_cuda.cu
     src/fast_gicp/cuda/fast_gicp_cuda.cu
   )
-  target_include_directories(fast_vgicp_cuda PRIVATE
+  target_include_directories(fast_vgicp_cuda PUBLIC
     include
     thirdparty/Sophus
     thirdparty/Eigen

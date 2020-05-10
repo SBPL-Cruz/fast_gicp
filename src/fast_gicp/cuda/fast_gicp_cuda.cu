@@ -104,17 +104,17 @@ void FastGICPCudaCore::set_target_neighbors(int k, const std::vector<int>& neigh
   *target_neighbors = k_neighbors;
 }
 
-struct untie_pair_second {
-  __device__ int operator() (thrust::pair<float, int>& p) const {
-    return p.second;
-  }
-};
+// struct untie_pair_second {
+//   __device__ int operator() (thrust::pair<float, int>& p) const {
+//     return p.second;
+//   }
+// };
 
-struct untie_pair_first {
-  __device__ float operator() (thrust::pair<float, int>& p) const {
-    return p.first;
-  }
-};
+// struct untie_pair_first {
+//   __device__ float operator() (thrust::pair<float, int>& p) const {
+//     return p.first;
+//   }
+// };
 
 struct copy_label_functor{
   copy_label_functor(const thrust::device_vector<int>& src_pose_label)
