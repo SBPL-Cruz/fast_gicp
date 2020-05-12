@@ -63,9 +63,13 @@ public:
   void set_target_cloud_multi(thrust::device_vector<Eigen::Vector3f>& target_cloud, thrust::device_vector<int>& target_cloud_label);
 
   void find_source_neighbors_multi(int k, int* cloud_pose_map, int* source_pose_label_map, int num_poses);
-  void find_source_neighbors_multi(int k, thrust::device_vector<int>& source_pose_map_vec, thrust::device_vector<int>& source_pose_label_map_vec, int num_poses);
+  void find_source_neighbors_multi(int k, 
+                                   thrust::device_vector<int>& source_pose_map_vec, 
+                                   thrust::device_vector<int>& source_pose_label_map_vec, 
+                                   thrust::device_vector<int>& source_cloud_label,
+                                   int num_poses);
 
-  void find_target_neighbors_multi(int k, int num_poses);
+  void find_target_neighbors_multi(int k, int num_poses, thrust::device_vector<int>& target_label_indices_vec);
   void set_input(float* source_cloud, 
                  int source_point_count, 
                  float* target_cloud, 
@@ -79,6 +83,8 @@ public:
                  thrust::device_vector<int>& source_pose_map_ptr,
                  thrust::device_vector<int>& target_cloud_label_ptr,
                  thrust::device_vector<int>& source_pose_label_map_ptr,
+                 thrust::device_vector<int>& source_cloud_label,
+                 thrust::device_vector<int>& target_label_indices,
                  int num_poses);
 
   bool optimize_multi(

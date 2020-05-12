@@ -343,7 +343,7 @@ void FastGICPCudaCore::set_target_cloud_multi(thrust::device_vector<Eigen::Vecto
   //   minus_vec.begin(), target_label_map_vec.begin(), 
   //   thrust::minus<float>()
   // );
-  thrust::sort_by_key(target_label_map_vec.begin(), target_label_map_vec.end(), target_points_local.begin());
+  // thrust::sort_by_key(target_label_map_vec.begin(), target_label_map_vec.end(), target_points_local.begin());
   
   // thrust::copy(
   //   target_label_map_vec.begin(),
@@ -406,6 +406,7 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k, int* source_pose_map_p
 void FastGICPCudaCore::find_source_neighbors_multi(int k, 
                                                    thrust::device_vector<int>& source_pose_map_vec, 
                                                    thrust::device_vector<int>& source_pose_label_map_vec, 
+                                                   thrust::device_vector<int>& source_label_map_vec, 
                                                    int num_poses) {
   
   // Used when calling directly from GPU
@@ -427,13 +428,17 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k,
   thrust::transform(k_neighbors.begin(), k_neighbors.end(), source_neighbors->begin(), untie_pair_second());
 
   // For each point in source, use corresponding point to pose map and pose to label map to create a direct source to label map for every point in source
-  thrust::device_vector<int> source_label_map_vec(source_point_count);
-  thrust::transform(
-    source_pose_map_vec.begin(), source_pose_map_vec.end(), source_label_map_vec.begin(), copy_label_functor(source_pose_label_map_vec)
-  );
+  // thrust::device_vector<int> source_label_map_vec_local(source_point_count);
+  // thrust::transform(
+  //   source_label_map_vec_local.begin(), 
+  //   source_label_map_vec_local.end(), 
+  //   source_label_map_vec_local.begin(), 
+  //   copy_label_functor(source_pose_label_map_vec)
+  // );
   
   source_pose_indices.reset(new Indices(pose_indices));
   source_pose_map.reset(new Indices(source_pose_map_vec));
+  // source_label_map.reset(new Indices(source_label_map_vec_local));
   source_label_map.reset(new Indices(source_label_map_vec));
   // thrust::copy(
   //   source_neighbors->begin(),
@@ -448,15 +453,22 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k,
 
 }
 
-void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses) {
+void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses, thrust::device_vector<int>& target_label_indices_vec) {
   assert(target_points);
   
   int target_point_count = target_points->size();
 
-  thrust::device_vector<int> label_indices;
-  int max_label_point_count;
-  extract_pose_indices(*target_label_map, target_point_count, num_poses, label_indices, max_label_point_count);
-  target_label_indices.reset(new Indices(label_indices));
+  if (target_label_indices_vec.empty())
+  {
+    thrust::device_vector<int> label_indices;
+    int max_label_point_count;
+    extract_pose_indices(*target_label_map, target_point_count, num_poses, label_indices, max_label_point_count);
+    target_label_indices.reset(new Indices(label_indices));
+  }
+  else
+  {
+    target_label_indices.reset(new Indices(target_label_indices_vec));
+  }
   // thrust::copy(
   //   target_label_indices->begin(),
   //   target_label_indices->end(), 
@@ -465,7 +477,7 @@ void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses) {
 
   thrust::device_vector<thrust::pair<float, int>> k_neighbors;
   // brute_force_knn_search(*target_points, *target_points, k, k_neighbors);
-  brute_force_knn_search(*target_points, *target_points, k, k_neighbors, *target_label_map, label_indices);
+  brute_force_knn_search(*target_points, *target_points, k, k_neighbors, *target_label_map, *target_label_indices);
 
   if(!target_neighbors) {
     target_neighbors.reset(new thrust::device_vector<int>(k_neighbors.size()));
@@ -477,9 +489,11 @@ void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses) {
 
 void FastGICPCudaCore::set_input(thrust::device_vector<Eigen::Vector3f>& source_cloud, 
                                  thrust::device_vector<Eigen::Vector3f>& target_cloud, 
-                                 thrust::device_vector<int>& source_pose_map_ptr,
-                                 thrust::device_vector<int>& target_cloud_label_ptr,
-                                 thrust::device_vector<int>& source_pose_label_map_ptr,
+                                 thrust::device_vector<int>& source_pose_map,
+                                 thrust::device_vector<int>& target_cloud_label,
+                                 thrust::device_vector<int>& source_pose_label_map,
+                                 thrust::device_vector<int>& source_cloud_label,
+                                 thrust::device_vector<int>& target_label_indices,
                                  int num_poses) {
     /*
     * source_pose_map_ptr - mapping of every point in source to a pose index
@@ -490,12 +504,12 @@ void FastGICPCudaCore::set_input(thrust::device_vector<Eigen::Vector3f>& source_
     set_source_cloud_multi(source_cloud);
   
     //// Below method finds neighbours, and various maps related to poses and stores them as class variables
-    find_source_neighbors_multi(k_correspondences, source_pose_map_ptr, source_pose_label_map_ptr, num_poses);
+    find_source_neighbors_multi(k_correspondences, source_pose_map, source_pose_label_map, source_cloud_label, num_poses);
     calculate_source_covariances(FROBENIUS);
   
     //// Set target cloud
-    set_target_cloud_multi(target_cloud, target_cloud_label_ptr);
-    find_target_neighbors_multi(k_correspondences, num_poses);
+    set_target_cloud_multi(target_cloud, target_cloud_label);
+    find_target_neighbors_multi(k_correspondences, num_poses, target_label_indices);
     calculate_target_covariances(FROBENIUS);
 
     this->num_poses = num_poses;
@@ -520,7 +534,8 @@ void FastGICPCudaCore::set_input(float* source_cloud,
   
     //// Set target cloud
     set_target_cloud_multi(target_cloud, target_point_count, target_cloud_label_ptr);
-    find_target_neighbors_multi(k_correspondences, num_poses);
+    thrust::device_vector<int> dummy_vec;
+    find_target_neighbors_multi(k_correspondences, num_poses, dummy_vec);
     calculate_target_covariances(FROBENIUS);
 
     this->num_poses = num_poses;

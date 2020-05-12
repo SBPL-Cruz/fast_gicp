@@ -195,6 +195,7 @@ static void brute_force_knn_search(const thrust::device_vector<Eigen::Vector3f>&
   // assert(source_pose_map.size() == source.size());
   std::chrono::time_point<std::chrono::system_clock> start, end;
   start = std::chrono::system_clock::now();
+  printf("source size : %d\n", source.size());
   printf("target size : %d\n", target.size());
   printf("pose_mask_icp size : %d\n", pose_mask_icp.size());
   printf("adjusted_x0s size : %d\n", adjusted_x0s.size());
