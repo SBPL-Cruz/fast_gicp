@@ -185,15 +185,24 @@ void FastGICPCuda<PointSource, PointTarget>::computeTransformationMulti(float* s
   vgicp_cuda->set_transformation_epsilon(transformation_epsilon_);
   vgicp_cuda->set_resolution(voxel_resolution_);
   vgicp_cuda->set_correspondence_randomness(k_correspondences_);
+  vgicp_cuda->set_input(source_cloud,
+                        source_point_count,
+                        target_cloud,
+                        target_point_count,
+                        cloud_pose_map,
+                        target_cloud_label,
+                        source_pose_label_map,
+                        num_poses);
 
-  converged_ = vgicp_cuda->optimize_multi(source_cloud,
-                                          source_point_count,
-                                          target_cloud,
-                                          target_point_count,
-                                          cloud_pose_map,
-                                          target_cloud_label,
-                                          source_pose_label_map,
-                                          num_poses,
+  converged_ = vgicp_cuda->optimize_multi(
+                                          // source_cloud,
+                                          // source_point_count,
+                                          // target_cloud,
+                                          // target_point_count,
+                                          // cloud_pose_map,
+                                          // target_cloud_label,
+                                          // source_pose_label_map,
+                                          // num_poses,
                                           estimated);
 
   // final_transformation_ = estimated.matrix();

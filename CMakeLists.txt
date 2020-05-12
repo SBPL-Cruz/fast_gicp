@@ -35,6 +35,7 @@ catkin_package(
     include 
     thirdparty/Sophus
     thirdparty/nvbio
+    ${PCL_INCLUDE_DIRS}
   LIBRARIES fast_gicp
 #  CATKIN_DEPENDS other_catkin_pkg
 #  DEPENDS system_lib

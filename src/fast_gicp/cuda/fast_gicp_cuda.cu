@@ -285,6 +285,13 @@ void FastGICPCudaCore::set_source_cloud_multi(float* source_cloud, int source_po
   source_points.reset(new Points(points));
 }
 
+void FastGICPCudaCore::set_source_cloud_multi(thrust::device_vector<Eigen::Vector3f>& source_cloud) {
+  // Used if calling directly from GPU
+  // Store source points in class object
+  thrust::device_vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> points(source_cloud.begin(), source_cloud.end());
+  source_points.reset(new Points(points));
+}
+
 void FastGICPCudaCore::set_target_cloud_multi(float* target_cloud, int target_point_count, int* target_cloud_label) {
   float* device_point_cloud;
   // cudaMalloc(&device_point_cloud, 3 * point_count * sizeof(float));
@@ -324,6 +331,36 @@ void FastGICPCudaCore::set_target_cloud_multi(float* target_cloud, int target_po
   // Save sorted map to class object
   target_label_map.reset(new Indices(target_label_map_vec));
 }
+void FastGICPCudaCore::set_target_cloud_multi(thrust::device_vector<Eigen::Vector3f>& target_points_local, thrust::device_vector<int>& target_label_map_vec) {
+  
+  // Used if calling directly from GPU
+  // float* device_point_cloud;
+  // Sort the target points according to increasing order of label, also sort the labels
+  // Test, subtracting one because labels start from 0
+  // thrust::device_vector<int> minus_vec(target_label_map_vec.size(), 1);
+  // thrust::transform(
+  //   target_label_map_vec.begin(), target_label_map_vec.end(), 
+  //   minus_vec.begin(), target_label_map_vec.begin(), 
+  //   thrust::minus<float>()
+  // );
+  thrust::sort_by_key(target_label_map_vec.begin(), target_label_map_vec.end(), target_points_local.begin());
+  
+  // thrust::copy(
+  //   target_label_map_vec.begin(),
+  //   target_label_map_vec.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+  // thrust::copy(
+  //   target_points_local.begin(),
+  //   target_points_local.end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+  thrust::device_vector<Eigen::Vector3f, Eigen::aligned_allocator<Eigen::Vector3f>> points(target_points_local.begin(), target_points_local.end());
+  target_points.reset(new Points(points));
+
+  // Save sorted map to class object
+  target_label_map.reset(new Indices(target_label_map_vec));
+}
 
 void FastGICPCudaCore::find_source_neighbors_multi(int k, int* source_pose_map_ptr, int* source_pose_label_map, int num_poses) {
   assert(source_points);
@@ -346,6 +383,50 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k, int* source_pose_map_p
 
   // For each point in source, use corresponding point to pose map and pose to label map to create a direct source to label map for every point in source
   thrust::device_vector<int> source_pose_label_map_vec(source_pose_label_map, source_pose_label_map + num_poses);
+  thrust::device_vector<int> source_label_map_vec(source_point_count);
+  thrust::transform(
+    source_pose_map_vec.begin(), source_pose_map_vec.end(), source_label_map_vec.begin(), copy_label_functor(source_pose_label_map_vec)
+  );
+  
+  source_pose_indices.reset(new Indices(pose_indices));
+  source_pose_map.reset(new Indices(source_pose_map_vec));
+  source_label_map.reset(new Indices(source_label_map_vec));
+  // thrust::copy(
+  //   source_neighbors->begin(),
+  //   source_neighbors->end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+  // thrust::copy(
+  //   source_label_map->begin(),
+  //   source_label_map->end(), 
+  //   std::ostream_iterator<int>(std::cout, " ")
+  // );
+
+}
+void FastGICPCudaCore::find_source_neighbors_multi(int k, 
+                                                   thrust::device_vector<int>& source_pose_map_vec, 
+                                                   thrust::device_vector<int>& source_pose_label_map_vec, 
+                                                   int num_poses) {
+  
+  // Used when calling directly from GPU
+  assert(source_points);
+  int source_point_count = source_points->size();
+  // For source KNN need to know range of pose indices in source cloud array
+  thrust::device_vector<int> pose_indices;
+  extract_pose_indices(source_pose_map_vec, source_point_count, num_poses, pose_indices, max_pose_point_count);
+
+  // For each point in source array, KNN will be done within the pose index range
+  thrust::device_vector<thrust::pair<float, int>> k_neighbors;
+  brute_force_knn_search(*source_points, *source_points, k, k_neighbors, source_pose_map_vec, pose_indices);
+
+  if(!source_neighbors) {
+    source_neighbors.reset(new thrust::device_vector<int>(k_neighbors.size()));
+  } else {
+    source_neighbors->resize(k_neighbors.size());
+  }
+  thrust::transform(k_neighbors.begin(), k_neighbors.end(), source_neighbors->begin(), untie_pair_second());
+
+  // For each point in source, use corresponding point to pose map and pose to label map to create a direct source to label map for every point in source
   thrust::device_vector<int> source_label_map_vec(source_point_count);
   thrust::transform(
     source_pose_map_vec.begin(), source_pose_map_vec.end(), source_label_map_vec.begin(), copy_label_functor(source_pose_label_map_vec)
@@ -394,14 +475,66 @@ void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses) {
   thrust::transform(k_neighbors.begin(), k_neighbors.end(), target_neighbors->begin(), untie_pair_second());
 }
 
-bool FastGICPCudaCore::optimize_multi(float* source_cloud, 
-                                      int source_point_count, 
-                                      float* target_cloud, 
-                                      int target_point_count,
-                                      int* source_pose_map_ptr,
-                                      int* target_cloud_label_ptr,
-                                      int* source_pose_label_map_ptr,
-                                      int num_poses,
+void FastGICPCudaCore::set_input(thrust::device_vector<Eigen::Vector3f>& source_cloud, 
+                                 thrust::device_vector<Eigen::Vector3f>& target_cloud, 
+                                 thrust::device_vector<int>& source_pose_map_ptr,
+                                 thrust::device_vector<int>& target_cloud_label_ptr,
+                                 thrust::device_vector<int>& source_pose_label_map_ptr,
+                                 int num_poses) {
+    /*
+    * source_pose_map_ptr - mapping of every point in source to a pose index
+    * target_cloud_label_ptr - mapping of every point in target to a segmentation label, has to start from 0
+    * source_pose_label_map_ptr - mapping of every pose to a segementation label, has to start from 0
+    */
+    //// Source cloud, contains all points of all rendered poses
+    set_source_cloud_multi(source_cloud);
+  
+    //// Below method finds neighbours, and various maps related to poses and stores them as class variables
+    find_source_neighbors_multi(k_correspondences, source_pose_map_ptr, source_pose_label_map_ptr, num_poses);
+    calculate_source_covariances(FROBENIUS);
+  
+    //// Set target cloud
+    set_target_cloud_multi(target_cloud, target_cloud_label_ptr);
+    find_target_neighbors_multi(k_correspondences, num_poses);
+    calculate_target_covariances(FROBENIUS);
+
+    this->num_poses = num_poses;
+}
+
+
+void FastGICPCudaCore::set_input(float* source_cloud, 
+                                 int source_point_count, 
+                                 float* target_cloud, 
+                                 int target_point_count,
+                                 int* source_pose_map_ptr,
+                                 int* target_cloud_label_ptr,
+                                 int* source_pose_label_map_ptr,
+                                 int num_poses) {
+
+    //// Source cloud, contains all points of all rendered poses
+    set_source_cloud_multi(source_cloud, source_point_count);
+  
+    //// Below method finds neighbours, and various maps related to poses and stores them as class variables
+    find_source_neighbors_multi(k_correspondences, source_pose_map_ptr, source_pose_label_map_ptr, num_poses);
+    calculate_source_covariances(FROBENIUS);
+  
+    //// Set target cloud
+    set_target_cloud_multi(target_cloud, target_point_count, target_cloud_label_ptr);
+    find_target_neighbors_multi(k_correspondences, num_poses);
+    calculate_target_covariances(FROBENIUS);
+
+    this->num_poses = num_poses;
+}
+
+bool FastGICPCudaCore::optimize_multi(
+                                      // float* source_cloud, 
+                                      // int source_point_count, 
+                                      // float* target_cloud, 
+                                      // int target_point_count,
+                                      // int* source_pose_map_ptr,
+                                      // int* target_cloud_label_ptr,
+                                      // int* source_pose_label_map_ptr,
+                                      // int num_poses,
                                       std::vector<Eigen::Isometry3f>& estimated) {
   /*
    * source_pose_map - map a point in source to its pose index
@@ -415,21 +548,21 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
   estimated.resize(num_poses, Eigen::Isometry3f::Identity());
 
   //// Source cloud, contains all points of all rendered poses
-  set_source_cloud_multi(source_cloud, source_point_count);
+  // set_source_cloud_multi(source_cloud, source_point_count);
 
-  //// Below method finds neighbours, and various maps related to poses and stores them as class variables
-  find_source_neighbors_multi(k_correspondences, source_pose_map_ptr, source_pose_label_map_ptr, num_poses);
-  calculate_source_covariances(FROBENIUS);
-  // thrust::copy(
-  //   source_neighbors.begin(),
-  //   source_neighbors.end(), 
-  //   std::ostream_iterator<int>(std::cout, " ")
-  // );
+  // //// Below method finds neighbours, and various maps related to poses and stores them as class variables
+  // find_source_neighbors_multi(k_correspondences, source_pose_map_ptr, source_pose_label_map_ptr, num_poses);
+  // calculate_source_covariances(FROBENIUS);
+  // // thrust::copy(
+  // //   source_neighbors.begin(),
+  // //   source_neighbors.end(), 
+  // //   std::ostream_iterator<int>(std::cout, " ")
+  // // );
 
-  //// Set target cloud
-  set_target_cloud_multi(target_cloud, target_point_count, target_cloud_label_ptr);
-  find_target_neighbors_multi(k_correspondences, num_poses);
-  calculate_target_covariances(FROBENIUS);
+  // //// Set target cloud
+  // set_target_cloud_multi(target_cloud, target_point_count, target_cloud_label_ptr);
+  // find_target_neighbors_multi(k_correspondences, num_poses);
+  // calculate_target_covariances(FROBENIUS);
 
   Eigen::Isometry3f initial_guess = Eigen::Isometry3f::Identity();
   std::cout << initial_guess.matrix() << std::endl;
@@ -627,6 +760,7 @@ bool FastGICPCudaCore::optimize_multi(float* source_cloud,
       // TODO : can shift this to a kernel
       for (int i = 0; i < num_poses; i++)
       {
+        // TODO : change this to a transform functor
         if (mask_pose_icp_host[i] == 1) {
           continue;
         }
