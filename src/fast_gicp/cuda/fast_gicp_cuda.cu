@@ -306,12 +306,12 @@ void FastGICPCudaCore::set_target_cloud_multi(float* target_cloud, int target_po
   // Sort the target points according to increasing order of label, also sort the labels
   thrust::device_vector<int> target_label_map_vec(target_cloud_label, target_cloud_label + target_point_count);
   // Test, subtracting one because labels start from 0
-  thrust::device_vector<int> minus_vec(target_label_map_vec.size(), 1);
-  thrust::transform(
-    target_label_map_vec.begin(), target_label_map_vec.end(), 
-    minus_vec.begin(), target_label_map_vec.begin(), 
-    thrust::minus<float>()
-  );
+  // thrust::device_vector<int> minus_vec(target_label_map_vec.size(), 1);
+  // thrust::transform(
+  //   target_label_map_vec.begin(), target_label_map_vec.end(), 
+  //   minus_vec.begin(), target_label_map_vec.begin(), 
+  //   thrust::minus<float>()
+  // );
   thrust::sort_by_key(target_label_map_vec.begin(), target_label_map_vec.end(), target_points_local.begin());
   
   
@@ -682,7 +682,7 @@ bool FastGICPCudaCore::optimize_multi(
 
     compute_derivatives_nn(*source_points, *source_covariances, 
                           *target_points, *target_covariances,
-                          k_indices, k_distances, 0.05,
+                          k_indices, k_distances, 0.15,
                           *source_pose_map, *source_pose_indices, num_poses,
                           max_pose_point_count,
                           adjusted_x0s,
