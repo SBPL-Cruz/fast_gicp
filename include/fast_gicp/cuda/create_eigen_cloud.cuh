@@ -41,7 +41,8 @@ struct create_eigen_cloud_kernel {
 struct extract_pose_index_kernel {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  extract_pose_index_kernel()
+  extract_pose_index_kernel(thrust::device_vector<int>& unequal_indices)
+  : unequal_indices_ptr(unequal_indices.data())
   {}
 
   // Calculate indices where array value is not equal to previous value
@@ -51,15 +52,18 @@ struct extract_pose_index_kernel {
     const int pose_index = thrust::get<1>(tuple);
 
     const int uneq_index = thrust::get<2>(tuple);
-    int& uneq_array_elem = thrust::get<3>(tuple);
+    // int& uneq_array_elem = thrust::get<3>(tuple);
 
     if (pose_index_next != pose_index) 
     {
       // Need to add one because next is 1 shifted, by adding one we get index in original point array
-      uneq_array_elem = uneq_index + 1;
+      // uneq_array_elem = uneq_index + 1;
+      unequal_indices_ptr[pose_index] = uneq_index + 1;
     }
 
   }
+
+  thrust::device_ptr<int> unequal_indices_ptr;
 
 };
 
@@ -69,6 +73,49 @@ struct is_invalid_kernel {
     return x == -1;
   }
 };
+
+struct fix_empty_poses{
+
+  fix_empty_poses(){}
+
+  __host__ __device__
+  int operator()(const int& end_i, const int& start_i) const
+  {
+    // For poses that are empty (-1 end indice), make end indice same as start indice
+    if (end_i == -1)
+    {
+        return start_i;
+    }
+    else
+    {
+      return end_i;
+    }
+  }
+};
+
+
+struct fix_empty_poses_loop {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  fix_empty_poses_loop(thrust::device_vector<int>& unequal_indices)
+  : unequal_indices_ptr(unequal_indices.data())
+  {}
+
+  // Calculate indices where array value is not equal to previous value
+  template<typename Tuple>
+  __host__ __device__ void operator() (Tuple tuple) const {
+    int uneq_index_i = thrust::get<1>(tuple);
+    int& uneq_index_val = thrust::get<0>(tuple);
+    if (uneq_index_val != -1) return;
+
+    while(unequal_indices_ptr[uneq_index_i] == -1) uneq_index_i--;
+    uneq_index_val =  unequal_indices_ptr[uneq_index_i];
+  }
+
+  thrust::device_ptr<int> unequal_indices_ptr;
+
+};
+
 
 } // namespace
 
@@ -102,10 +149,19 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
                         const int num_poses,
                         thrust::device_vector<int>& unequal_indices,
                         int& max_pose_point_count) {
-    /* Extract the ranges in cloud array for every pose to restrict nearest neighbour to within that range
+    /* Extract the ranges in cloud array for every pose (or segmentation label) to restrict nearest neighbour to within that range
      * cloud_pose_map_vec - contains mapping of every point to a pose index
-     *
+     * unequal_indices - output where index i denotes the start range and i + 1 denotes end range
      */
+    // thrust::copy(
+    //   cloud_pose_map_vec.begin() + 1,
+    //   cloud_pose_map_vec.end(), 
+    //   std::ostream_iterator<int>(std::cout, " ")
+    // );
+    // printf("\n");
+    printf("extract_pose_indices()\n");
+    printf("cloud_pose_map_vec() size : %d\n", cloud_pose_map_vec.size());
+    printf("cloud_point_count : %d\n", cloud_point_count);
     thrust::device_vector<int> cloud_pose_map_next_vec;
     cloud_pose_map_next_vec.assign(cloud_pose_map_vec.begin() + 1, cloud_pose_map_vec.end());
     // Add last element to make length equal
@@ -114,23 +170,56 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
     thrust::counting_iterator<int> first(0);
     thrust::counting_iterator<int> last = first + cloud_point_count;
 
-    unequal_indices.resize(cloud_point_count, -1);
+    // unequal_indices.resize(cloud_point_count, -1);
+    // Find max value in the mapping and use it to set the size of unequal indices
+    thrust::device_vector<const int>::iterator iter = thrust::max_element(cloud_pose_map_vec.begin(), cloud_pose_map_vec.end());
+    int max_val = *iter;
+    unequal_indices.resize(max_val, -1);
 
-    // Calculate the indices in cloud array where the pose index changes (not equal to previous value)
+    // Calculate the end indices in cloud array where the pose index changes (not equal to previous value)
+    // If a pose has zero points, the index will be set to -1
     thrust::for_each(
     thrust::make_zip_iterator( 
-        thrust::make_tuple(cloud_pose_map_next_vec.begin(), cloud_pose_map_vec.begin(), first, unequal_indices.begin()) 
+        thrust::make_tuple(cloud_pose_map_next_vec.begin(), cloud_pose_map_vec.begin(), first) 
       ), 
       thrust::make_zip_iterator( 
-        thrust::make_tuple(cloud_pose_map_next_vec.end(), cloud_pose_map_vec.end(), last, unequal_indices.end())
+        thrust::make_tuple(cloud_pose_map_next_vec.end(), cloud_pose_map_vec.end(), last)
       ), 
-      extract_pose_index_kernel()
+      extract_pose_index_kernel(unequal_indices)
     );
 
-    unequal_indices.erase(thrust::remove_if(unequal_indices.begin(), unequal_indices.end(), is_invalid_kernel()), unequal_indices.end());
+    // unequal_indices.erase(thrust::remove_if(unequal_indices.begin(), unequal_indices.end(), is_invalid_kernel()), unequal_indices.end());
     unequal_indices.insert(unequal_indices.begin(), 0);
     unequal_indices.push_back(cloud_point_count);
 
+    // thrust::copy(
+    //   unequal_indices.begin(),
+    //   unequal_indices.end(), 
+    //   std::ostream_iterator<int>(std::cout, " ")
+    // );
+    // printf("\n");
+
+    // For poses with no points, put the start indice in place of -1 at the end indice so that count is 0
+    // thrust::transform(unequal_indices.begin(), unequal_indices.end(), unequal_indices.begin() + 1, unequal_indices.begin(), fix_empty_poses());
+    last = first + unequal_indices.size();
+    thrust::for_each(
+    thrust::make_zip_iterator( 
+        thrust::make_tuple(unequal_indices.begin(), first) 
+      ), 
+      thrust::make_zip_iterator( 
+        thrust::make_tuple(unequal_indices.end(), last)
+      ), 
+      fix_empty_poses_loop(unequal_indices)
+    );
+
+    // thrust::copy(
+    //   unequal_indices.begin(),
+    //   unequal_indices.end(), 
+    //   std::ostream_iterator<int>(std::cout, " ")
+    // );
+    // printf("\n");
+    // printf("Num poses : %d, size of unequal indices : %d, max_point_count : %d\n", num_poses, unequal_indices.size(), max_pose_point_count);
+    
     // Calculate the maximum number of points from all poses
     thrust::device_vector<int> unequal_indices_prev(unequal_indices.begin(), unequal_indices.end()-1);
     thrust::device_vector<int> pose_point_count(unequal_indices_prev.size());
@@ -143,7 +232,7 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
 
     max_pose_point_count = pose_point_count[max_elem_iter - pose_point_count.begin()];
     // thrust::copy(
-    //   unequal_indices.begin() + 1,
+    //   unequal_indices.begin(),
     //   unequal_indices.end(), 
     //   std::ostream_iterator<int>(std::cout, " ")
     // );

@@ -410,6 +410,7 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k,
                                                    int num_poses) {
   
   // Used when calling directly from GPU
+  printf("find_source_neighbors_multi()\n");
   assert(source_points);
   int source_point_count = source_points->size();
   // For source KNN need to know range of pose indices in source cloud array
@@ -454,21 +455,22 @@ void FastGICPCudaCore::find_source_neighbors_multi(int k,
 }
 
 void FastGICPCudaCore::find_target_neighbors_multi(int k, int num_poses, thrust::device_vector<int>& target_label_indices_vec) {
+  printf("find_target_neighbors_multi()\n");
   assert(target_points);
   
   int target_point_count = target_points->size();
 
-  if (target_label_indices_vec.empty())
-  {
-    thrust::device_vector<int> label_indices;
-    int max_label_point_count;
-    extract_pose_indices(*target_label_map, target_point_count, num_poses, label_indices, max_label_point_count);
-    target_label_indices.reset(new Indices(label_indices));
-  }
-  else
-  {
-    target_label_indices.reset(new Indices(target_label_indices_vec));
-  }
+  // if (target_label_indices_vec.empty())
+  // {
+  //   thrust::device_vector<int> label_indices;
+  //   int max_label_point_count;
+  //   extract_pose_indices(*target_label_map, target_point_count, num_poses, label_indices, max_label_point_count);
+  //   target_label_indices.reset(new Indices(label_indices));
+  // }
+  // else
+  // {
+  target_label_indices.reset(new Indices(target_label_indices_vec));
+  // }
   // thrust::copy(
   //   target_label_indices->begin(),
   //   target_label_indices->end(), 
@@ -495,6 +497,7 @@ void FastGICPCudaCore::set_input(thrust::device_vector<Eigen::Vector3f>& source_
                                  thrust::device_vector<int>& source_cloud_label,
                                  thrust::device_vector<int>& target_label_indices,
                                  int num_poses) {
+    printf("set_input()\n");
     /*
     * source_pose_map_ptr - mapping of every point in source to a pose index
     * target_cloud_label_ptr - mapping of every point in target to a segmentation label, has to start from 0
@@ -513,6 +516,7 @@ void FastGICPCudaCore::set_input(thrust::device_vector<Eigen::Vector3f>& source_
     calculate_target_covariances(FROBENIUS);
 
     this->num_poses = num_poses;
+    printf("set_input() done\n");
 }
 
 
