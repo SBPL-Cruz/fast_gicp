@@ -174,6 +174,7 @@ void extract_pose_indices(const thrust::device_vector<int>& cloud_pose_map_vec,
     // Find max value in the mapping and use it to set the size of unequal indices
     thrust::device_vector<const int>::iterator iter = thrust::max_element(cloud_pose_map_vec.begin(), cloud_pose_map_vec.end());
     int max_val = *iter;
+    printf("max index : %d\n", max_val);
     unequal_indices.resize(max_val, -1);
 
     // Calculate the end indices in cloud array where the pose index changes (not equal to previous value)

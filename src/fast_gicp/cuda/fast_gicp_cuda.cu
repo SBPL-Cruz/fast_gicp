@@ -538,8 +538,11 @@ void FastGICPCudaCore::set_input(float* source_cloud,
   
     //// Set target cloud
     set_target_cloud_multi(target_cloud, target_point_count, target_cloud_label_ptr);
-    thrust::device_vector<int> dummy_vec;
-    find_target_neighbors_multi(k_correspondences, num_poses, dummy_vec);
+    thrust::device_vector<int> label_indices;
+    int max_label_point_count;
+    extract_pose_indices(*target_label_map, target_point_count, num_poses, label_indices, max_label_point_count);
+    target_label_indices.reset(new Indices(label_indices));
+    find_target_neighbors_multi(k_correspondences, num_poses, label_indices);
     calculate_target_covariances(FROBENIUS);
 
     this->num_poses = num_poses;
